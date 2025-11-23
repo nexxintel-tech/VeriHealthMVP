@@ -3,6 +3,7 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useRealtimeSubscriptions } from "@/lib/realtime";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/Dashboard";
 import Login from "@/pages/Login";
@@ -10,6 +11,9 @@ import PatientList from "@/pages/PatientList";
 import PatientDetail from "@/pages/PatientDetail";
 
 function Router() {
+  // Enable realtime updates
+  useRealtimeSubscriptions();
+
   return (
     <Switch>
       <Route path="/login" component={Login} />
