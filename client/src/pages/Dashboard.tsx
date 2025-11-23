@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { 
   Users, 
   Activity, 
@@ -9,13 +10,29 @@ import Layout from "@/components/layout/Layout";
 import { StatCard } from "@/components/dashboard/StatCard";
 import { RiskBadge } from "@/components/dashboard/RiskBadge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { MOCK_PATIENTS, MOCK_ALERTS } from "@/lib/mockData";
+import { fetchPatients, fetchAlerts, fetchDashboardStats } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export default function Dashboard() {
-  const highRiskCount = MOCK_PATIENTS.filter(p => p.riskLevel === "high").length;
-  const activeAlerts = MOCK_ALERTS.filter(a => !a.isRead).length;
+  const { data: patients = [], isLoading: patientsLoading } = useQuery({
+    queryKey: ["patients"],
+    queryFn: fetchPatients,
+  });
+
+  const { data: alerts = [], isLoading: alertsLoading } = useQuery({
+    queryKey: ["alerts"],
+    queryFn: fetchAlerts,
+  });
+
+  const { data: stats, isLoading: statsLoading } = useQuery({
+    queryKey: ["dashboard-stats"],
+    queryFn: fetchDashboardStats,
+  });
+
+  const highRiskPatients = patients.filter(p => p.riskLevel === "high" || p.riskLevel === "medium");
+  const recentAlerts = alerts.slice(0, 4);
 
   return (
     <Layout>
@@ -28,36 +45,53 @@ export default function Dashboard() {
 
         {/* Stats Grid */}
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          <StatCard 
-            title="Total Patients" 
-            value={MOCK_PATIENTS.length} 
-            icon={Users} 
-            trend="+12% from last month" 
-            trendDirection="up"
-          />
-          <StatCard 
-            title="High Risk Patients" 
-            value={highRiskCount} 
-            icon={Activity} 
-            trend="+2 new this week" 
-            trendDirection="down"
-            className="border-l-4 border-l-risk-high"
-          />
-          <StatCard 
-            title="Active Alerts" 
-            value={activeAlerts} 
-            icon={AlertTriangle} 
-            trend="Requires attention" 
-            trendDirection="down"
-            className="border-l-4 border-l-warning"
-          />
-          <StatCard 
-            title="Avg. Risk Score" 
-            value="42" 
-            icon={HeartPulse} 
-            trend="Stable" 
-            trendDirection="neutral"
-          />
+          {statsLoading ? (
+            <>
+              {[1, 2, 3, 4].map(i => (
+                <Card key={i} className="overflow-hidden border-none shadow-sm">
+                  <CardHeader className="pb-2">
+                    <Skeleton className="h-4 w-24" />
+                  </CardHeader>
+                  <CardContent>
+                    <Skeleton className="h-8 w-16" />
+                  </CardContent>
+                </Card>
+              ))}
+            </>
+          ) : (
+            <>
+              <StatCard 
+                title="Total Patients" 
+                value={stats?.totalPatients || 0} 
+                icon={Users} 
+                trend="+12% from last month" 
+                trendDirection="up"
+              />
+              <StatCard 
+                title="High Risk Patients" 
+                value={stats?.highRiskCount || 0} 
+                icon={Activity} 
+                trend="+2 new this week" 
+                trendDirection="down"
+                className="border-l-4 border-l-risk-high"
+              />
+              <StatCard 
+                title="Active Alerts" 
+                value={stats?.activeAlerts || 0} 
+                icon={AlertTriangle} 
+                trend="Requires attention" 
+                trendDirection="down"
+                className="border-l-4 border-l-warning"
+              />
+              <StatCard 
+                title="Avg. Risk Score" 
+                value={stats?.avgRiskScore || 0} 
+                icon={HeartPulse} 
+                trend="Stable" 
+                trendDirection="neutral"
+              />
+            </>
+          )}
         </div>
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
@@ -70,28 +104,43 @@ export default function Dashboard() {
               </Button>
             </CardHeader>
             <CardContent>
-              <div className="space-y-4">
-                {MOCK_PATIENTS.filter(p => p.riskLevel === "high" || p.riskLevel === "medium").slice(0, 5).map((patient) => (
-                  <div key={patient.id} className="flex items-center justify-between p-4 rounded-lg bg-secondary/30 hover:bg-secondary/50 transition-colors group cursor-pointer border border-transparent hover:border-border">
-                    <div className="flex items-center gap-4">
-                      <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold">
-                        {patient.name.charAt(0)}
+              {patientsLoading ? (
+                <div className="space-y-4">
+                  {[1, 2, 3].map(i => (
+                    <Skeleton key={i} className="h-20 w-full" />
+                  ))}
+                </div>
+              ) : highRiskPatients.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <p>No high-priority patients at this time.</p>
+                  <p className="text-sm mt-1">All patients are stable.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {highRiskPatients.slice(0, 5).map((patient) => (
+                    <Link key={patient.id} href={`/patients/${patient.id}`}>
+                      <div className="flex items-center justify-between p-4 rounded-lg bg-secondary/30 hover:bg-secondary/50 transition-colors group cursor-pointer border border-transparent hover:border-border">
+                        <div className="flex items-center gap-4">
+                          <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold">
+                            {patient.name.charAt(0)}
+                          </div>
+                          <div>
+                            <p className="font-medium group-hover:text-primary transition-colors">{patient.name}</p>
+                            <p className="text-sm text-muted-foreground">{patient.conditions[0] || "No conditions"}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          <div className="text-right">
+                            <p className="text-sm font-medium text-foreground">Score: {patient.riskScore}</p>
+                            <p className="text-xs text-muted-foreground">Last sync: {new Date(patient.lastSync).toLocaleTimeString()}</p>
+                          </div>
+                          <RiskBadge level={patient.riskLevel} />
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-medium group-hover:text-primary transition-colors">{patient.name}</p>
-                        <p className="text-sm text-muted-foreground">{patient.conditions[0]}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <div className="text-right">
-                        <p className="text-sm font-medium text-foreground">Score: {patient.riskScore}</p>
-                        <p className="text-xs text-muted-foreground">Last sync: 2h ago</p>
-                      </div>
-                      <RiskBadge level={patient.riskLevel} />
-                    </div>
-                  </div>
-                ))}
-              </div>
+                    </Link>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -101,18 +150,32 @@ export default function Dashboard() {
               <CardTitle>Recent Alerts</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="space-y-4">
-                {MOCK_ALERTS.slice(0, 4).map((alert) => (
-                  <div key={alert.id} className="flex gap-3 items-start pb-4 border-b last:border-0 last:pb-0 border-border">
-                    <div className={`mt-1 h-2 w-2 rounded-full flex-shrink-0 ${alert.severity === 'high' ? 'bg-destructive' : 'bg-warning'}`} />
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium leading-none">{alert.type}</p>
-                      <p className="text-xs text-muted-foreground">{alert.patientName} • 2h ago</p>
-                      <p className="text-sm text-foreground/80">{alert.message}</p>
+              {alertsLoading ? (
+                <div className="space-y-4">
+                  {[1, 2, 3].map(i => (
+                    <Skeleton key={i} className="h-16 w-full" />
+                  ))}
+                </div>
+              ) : recentAlerts.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <AlertTriangle className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <p>No recent alerts</p>
+                  <p className="text-sm mt-1">System monitoring is active.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {recentAlerts.map((alert) => (
+                    <div key={alert.id} className="flex gap-3 items-start pb-4 border-b last:border-0 last:pb-0 border-border">
+                      <div className={`mt-1 h-2 w-2 rounded-full flex-shrink-0 ${alert.severity === 'high' ? 'bg-destructive' : 'bg-warning'}`} />
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium leading-none">{alert.type}</p>
+                        <p className="text-xs text-muted-foreground">{alert.patientName} • {new Date(alert.timestamp).toLocaleString()}</p>
+                        <p className="text-sm text-foreground/80">{alert.message}</p>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

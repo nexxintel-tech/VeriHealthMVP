@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import Layout from "@/components/layout/Layout";
 import { 
   Table, 
@@ -9,9 +10,9 @@ import {
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { RiskBadge } from "@/components/dashboard/RiskBadge";
-import { MOCK_PATIENTS } from "@/lib/mockData";
+import { fetchPatients } from "@/lib/api";
 import { Search, Filter, MoreHorizontal, ArrowUpDown } from "lucide-react";
 import { 
   DropdownMenu, 
@@ -21,8 +22,22 @@ import {
   DropdownMenuTrigger 
 } from "@/components/ui/dropdown-menu";
 import { Link } from "wouter";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useState } from "react";
 
 export default function PatientList() {
+  const { data: patients = [], isLoading } = useQuery({
+    queryKey: ["patients"],
+    queryFn: fetchPatients,
+  });
+
+  const [searchTerm, setSearchTerm] = useState("");
+
+  const filteredPatients = patients.filter(p => 
+    p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    p.conditions.some(c => c.toLowerCase().includes(searchTerm.toLowerCase()))
+  );
+
   return (
     <Layout>
       <div className="space-y-6">
@@ -39,9 +54,15 @@ export default function PatientList() {
             <div className="flex items-center justify-between gap-4">
               <div className="relative flex-1 max-w-sm">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input placeholder="Search by name, condition..." className="pl-9" />
+                <Input 
+                  placeholder="Search by name, condition..." 
+                  className="pl-9" 
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  data-testid="input-search-patients"
+                />
               </div>
-              <Button variant="outline" size="sm" className="gap-2">
+              <Button variant="outline" size="sm" className="gap-2" data-testid="button-filter">
                 <Filter className="h-4 w-4" />
                 Filter
               </Button>
@@ -67,55 +88,77 @@ export default function PatientList() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {MOCK_PATIENTS.map((patient) => (
-                    <TableRow key={patient.id} className="group hover:bg-secondary/20">
-                      <TableCell className="font-medium">
-                        <div className="flex items-center gap-3">
-                          <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-bold">
-                            {patient.name.charAt(0)}
-                          </div>
-                          <div className="flex flex-col">
-                            <span className="text-sm font-medium group-hover:text-primary transition-colors">
-                              <Link href={`/patients/${patient.id}`}>{patient.name}</Link>
-                            </span>
-                            <span className="text-xs text-muted-foreground">{patient.age} yrs • {patient.gender}</span>
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <div className={`h-2 w-2 rounded-full ${patient.status === 'Active' ? 'bg-green-500' : 'bg-gray-300'}`} />
-                          <span className="text-sm text-muted-foreground">{patient.status}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>{patient.conditions[0]}</TableCell>
-                      <TableCell className="font-mono font-medium">{patient.riskScore}/100</TableCell>
-                      <TableCell>
-                        <RiskBadge level={patient.riskLevel} />
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-sm">
-                        {new Date(patient.lastSync).toLocaleDateString()}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" className="h-8 w-8 p-0">
-                              <span className="sr-only">Open menu</span>
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                            <DropdownMenuItem asChild>
-                              <Link href={`/patients/${patient.id}`}>View Details</Link>
-                            </DropdownMenuItem>
-                            <DropdownMenuItem>Edit Profile</DropdownMenuItem>
-                            <DropdownMenuItem className="text-destructive">Discharge</DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                  {isLoading ? (
+                    Array.from({ length: 5 }).map((_, i) => (
+                      <TableRow key={i}>
+                        <TableCell><Skeleton className="h-8 w-full" /></TableCell>
+                        <TableCell><Skeleton className="h-4 w-16" /></TableCell>
+                        <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+                        <TableCell><Skeleton className="h-4 w-16" /></TableCell>
+                        <TableCell><Skeleton className="h-6 w-20" /></TableCell>
+                        <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                        <TableCell><Skeleton className="h-8 w-8" /></TableCell>
+                      </TableRow>
+                    ))
+                  ) : filteredPatients.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                        {searchTerm ? "No patients match your search" : "No patients found"}
                       </TableCell>
                     </TableRow>
-                  ))}
+                  ) : (
+                    filteredPatients.map((patient) => (
+                      <TableRow key={patient.id} className="group hover:bg-secondary/20" data-testid={`row-patient-${patient.id}`}>
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-3">
+                            <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-bold">
+                              {patient.name.charAt(0)}
+                            </div>
+                            <div className="flex flex-col">
+                              <Link href={`/patients/${patient.id}`}>
+                                <span className="text-sm font-medium group-hover:text-primary transition-colors" data-testid={`link-patient-${patient.id}`}>
+                                  {patient.name}
+                                </span>
+                              </Link>
+                              <span className="text-xs text-muted-foreground">{patient.age} yrs • {patient.gender}</span>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <div className={`h-2 w-2 rounded-full ${patient.status === 'Active' ? 'bg-green-500' : 'bg-gray-300'}`} />
+                            <span className="text-sm text-muted-foreground">{patient.status}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>{patient.conditions[0] || "None"}</TableCell>
+                        <TableCell className="font-mono font-medium">{patient.riskScore}/100</TableCell>
+                        <TableCell>
+                          <RiskBadge level={patient.riskLevel} />
+                        </TableCell>
+                        <TableCell className="text-muted-foreground text-sm">
+                          {new Date(patient.lastSync).toLocaleDateString()}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" className="h-8 w-8 p-0" data-testid={`button-actions-${patient.id}`}>
+                                <span className="sr-only">Open menu</span>
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                              <DropdownMenuItem asChild>
+                                <Link href={`/patients/${patient.id}`}>View Details</Link>
+                              </DropdownMenuItem>
+                              <DropdownMenuItem>Edit Profile</DropdownMenuItem>
+                              <DropdownMenuItem className="text-destructive">Discharge</DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
                 </TableBody>
               </Table>
             </div>
