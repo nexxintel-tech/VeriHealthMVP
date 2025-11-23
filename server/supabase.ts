@@ -1,0 +1,129 @@
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.SUPABASE_URL!;
+const supabaseKey = process.env.SUPABASE_ANON_KEY!;
+
+if (!supabaseUrl || !supabaseKey) {
+  throw new Error('Missing Supabase environment variables');
+}
+
+export const supabase = createClient(supabaseUrl, supabaseKey);
+
+export type Database = {
+  public: {
+    Tables: {
+      users: {
+        Row: {
+          id: string;
+          email: string;
+          role: 'patient' | 'clinician' | 'admin';
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          email: string;
+          role?: 'patient' | 'clinician' | 'admin';
+          created_at?: string;
+        };
+      };
+      patients: {
+        Row: {
+          id: string;
+          user_id: string;
+          name: string;
+          age: number;
+          gender: string;
+          status: 'Active' | 'Inactive';
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          name: string;
+          age: number;
+          gender: string;
+          status?: 'Active' | 'Inactive';
+          created_at?: string;
+        };
+      };
+      conditions: {
+        Row: {
+          id: string;
+          patient_id: string;
+          name: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          patient_id: string;
+          name: string;
+          created_at?: string;
+        };
+      };
+      vital_readings: {
+        Row: {
+          id: string;
+          patient_id: string;
+          type: string;
+          value: number;
+          unit: string;
+          timestamp: string;
+          status: 'normal' | 'warning' | 'critical';
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          patient_id: string;
+          type: string;
+          value: number;
+          unit: string;
+          timestamp?: string;
+          status?: 'normal' | 'warning' | 'critical';
+          created_at?: string;
+        };
+      };
+      risk_scores: {
+        Row: {
+          id: string;
+          patient_id: string;
+          score: number;
+          risk_level: 'low' | 'medium' | 'high';
+          last_sync: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          patient_id: string;
+          score: number;
+          risk_level: 'low' | 'medium' | 'high';
+          last_sync?: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+      };
+      alerts: {
+        Row: {
+          id: string;
+          patient_id: string;
+          type: string;
+          message: string;
+          severity: 'low' | 'medium' | 'high';
+          is_read: boolean;
+          timestamp: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          patient_id: string;
+          type: string;
+          message: string;
+          severity: 'low' | 'medium' | 'high';
+          is_read?: boolean;
+          timestamp?: string;
+          created_at?: string;
+        };
+      };
+    };
+  };
+};
