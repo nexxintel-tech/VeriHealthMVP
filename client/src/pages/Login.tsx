@@ -28,10 +28,17 @@ export default function Login() {
       
       setLocation("/");
     } catch (error: any) {
+      // Provide specific feedback for email confirmation
+      const errorMessage = error.message || "Invalid email or password";
+      const isConfirmationError = errorMessage.toLowerCase().includes("email not confirmed");
+      
       toast({
         title: "Login failed",
-        description: error.message || "Invalid email or password",
+        description: isConfirmationError 
+          ? "Please check your email and click the confirmation link before logging in."
+          : errorMessage,
         variant: "destructive",
+        duration: isConfirmationError ? 8000 : 5000,
       });
     } finally {
       setIsLoading(false);

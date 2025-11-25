@@ -56,7 +56,23 @@ export default function Register() {
 
       const data = await response.json();
       
-      // Store token and user info
+      // Check if email confirmation is required
+      if (!data.session) {
+        // Email confirmation is enabled - show instructions
+        toast({
+          title: "Registration successful!",
+          description: "Please check your email to confirm your account before logging in.",
+          duration: 8000,
+        });
+        
+        // Redirect to login after showing message
+        setTimeout(() => {
+          setLocation("/login");
+        }, 2000);
+        return;
+      }
+      
+      // Store token and user info (email confirmation disabled)
       if (data.session?.access_token) {
         setAuthToken(data.session.access_token);
         
