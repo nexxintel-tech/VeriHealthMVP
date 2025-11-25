@@ -5,6 +5,7 @@ import Home from './pages/Home';
 import About from './pages/About';
 import Shop from './pages/Shop';
 import Contact from './pages/Contact';
+import LogoPreview from './pages/LogoPreview';
 
 // Dashboard URL - MUST be configured via VITE_DASHBOARD_URL environment variable
 // This prevents accidentally redirecting users back to the marketing site
@@ -85,6 +86,7 @@ function App() {
           <Route path="/shop" component={Shop} />
           <Route path="/contact" component={Contact} />
           <Route path="/portal" component={PortalRedirect} />
+          <Route path="/logo-preview" component={LogoPreview} />
           <Route>
             {/* 404 - Redirect to home */}
             <Redirect to="/" />
