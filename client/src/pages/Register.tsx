@@ -3,7 +3,6 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Activity, Loader2, UserPlus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { setAuthToken, setUser } from "@/lib/auth";
@@ -15,7 +14,6 @@ export default function Register() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [role, setRole] = useState<'patient' | 'clinician'>("patient");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,7 +46,7 @@ export default function Register() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email, password, role }),
+        body: JSON.stringify({ email, password }),
       });
 
       if (!response.ok) {
@@ -148,27 +146,12 @@ export default function Register() {
                 data-testid="input-confirm-password"
               />
             </div>
-            
-            <div className="space-y-3">
-              <Label>I am a:</Label>
-              <RadioGroup 
-                value={role} 
-                onValueChange={(value) => setRole(value as 'patient' | 'clinician')}
-                disabled={isLoading}
-              >
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="patient" id="patient" data-testid="radio-patient" />
-                  <Label htmlFor="patient" className="font-normal cursor-pointer">
-                    Patient - Monitor my own health
-                  </Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="clinician" id="clinician" data-testid="radio-clinician" />
-                  <Label htmlFor="clinician" className="font-normal cursor-pointer">
-                    Healthcare Provider - Monitor patients
-                  </Label>
-                </div>
-              </RadioGroup>
+
+            <div className="bg-blue-50 dark:bg-blue-950/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800">
+              <p className="text-sm text-muted-foreground">
+                New accounts are created as <strong>Patient</strong> accounts. 
+                Contact an administrator if you need healthcare provider access.
+              </p>
             </div>
 
             <Button 

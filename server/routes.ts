@@ -29,16 +29,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/auth/register", async (req, res) => {
     try {
-      const { email, password, role = 'patient' } = req.body;
+      const { email, password } = req.body;
 
       // Validate inputs
       if (!email || !password) {
         return res.status(400).json({ error: "Email and password are required" });
       }
 
-      if (!['patient', 'clinician', 'admin'].includes(role)) {
-        return res.status(400).json({ error: "Invalid role. Must be patient, clinician, or admin" });
-      }
+      // SECURITY: Always default to 'patient' role
+      // Clinician/admin roles must be assigned by administrators
+      const role = 'patient';
 
       // Create user in Supabase Auth
       const { data: authData, error: authError } = await supabase.auth.signUp({
@@ -52,7 +52,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ error: "Failed to create user" });
       }
 
-      // Create user record in users table
+      // Create user record in users table with patient role
       const { error: userError } = await supabase
         .from('users')
         .insert({
@@ -117,25 +117,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/auth/reset-password", async (req, res) => {
     try {
-      const { password } = req.body;
-      const authHeader = req.headers.authorization;
-      const token = authHeader?.substring(7);
-
-      if (!token) {
-        return res.status(401).json({ error: "Missing authorization token" });
-      }
+      const { password, access_token } = req.body;
 
       if (!password) {
         return res.status(400).json({ error: "Password is required" });
       }
 
-      const { error } = await supabase.auth.updateUser({
-        password: password
+      if (!access_token) {
+        return res.status(400).json({ error: "Invalid reset token" });
+      }
+
+      // Verify the access token and get user
+      const { data: { user }, error: authError } = await supabase.auth.getUser(access_token);
+
+      if (authError || !user) {
+        return res.status(401).json({ error: "Invalid or expired reset token" });
+      }
+
+      // Update the user's password using admin API
+      const { error: updateError } = await supabase.auth.admin.updateUserById(
+        user.id,
+        { password: password }
+      );
+
+      if (updateError) throw updateError;
+
+      res.json({ 
+        message: "Password reset successfully. Please log in with your new password."
       });
-
-      if (error) throw error;
-
-      res.json({ message: "Password reset successfully" });
     } catch (error: any) {
       console.error("Reset password error:", error);
       res.status(500).json({ error: error.message || "Failed to reset password" });

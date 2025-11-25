@@ -18,10 +18,10 @@ export default function ResetPassword() {
     // Extract access token from URL hash (Supabase sends it in the URL)
     const hash = window.location.hash;
     const params = new URLSearchParams(hash.substring(1));
-    const token = params.get('access_token');
+    const access = params.get('access_token');
     
-    if (token) {
-      setAccessToken(token);
+    if (access) {
+      setAccessToken(access);
     } else {
       toast({
         title: "Invalid reset link",
@@ -71,9 +71,11 @@ export default function ResetPassword() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${accessToken}`,
         },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ 
+          password, 
+          access_token: accessToken
+        }),
       });
 
       if (!response.ok) {
@@ -83,7 +85,7 @@ export default function ResetPassword() {
 
       toast({
         title: "Password reset successful",
-        description: "You can now log in with your new password",
+        description: "Please log in with your new password",
       });
 
       // Redirect to login after 2 seconds
