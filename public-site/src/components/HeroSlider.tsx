@@ -113,6 +113,14 @@ export default function HeroSlider() {
                     <ArrowRight className="h-5 w-5" />
                   </button>
                 </Link>
+                <Link href="/about">
+                  <button
+                    className="px-8 py-4 bg-white/10 backdrop-blur-sm border-2 border-white text-white rounded-lg font-semibold hover:bg-white/20 hover:scale-105 transition-all shadow-xl inline-flex items-center justify-center gap-2"
+                    data-testid="button-about"
+                  >
+                    About
+                  </button>
+                </Link>
                 <Link href="/shop">
                   <button
                     className="px-8 py-4 bg-white/10 backdrop-blur-sm border-2 border-white text-white rounded-lg font-semibold hover:bg-white/20 hover:scale-105 transition-all shadow-xl inline-flex items-center justify-center gap-2"
