@@ -37,11 +37,16 @@ export default function Layout({ children }: LayoutProps) {
   const user = getUser();
 
   const navItems = [
-    { href: "/", icon: LayoutDashboard, label: "Dashboard" },
-    { href: "/patients", icon: Users, label: "Patients" },
-    { href: "/alerts", icon: Bell, label: "Alerts" },
-    { href: "/settings", icon: Settings, label: "Settings" },
+    { href: "/", icon: LayoutDashboard, label: "Dashboard", roles: ['patient', 'clinician', 'admin'] },
+    { href: "/patients", icon: Users, label: "Patients", roles: ['patient', 'clinician', 'admin'] },
+    { href: "/alerts", icon: Bell, label: "Alerts", roles: ['clinician', 'admin'] },
+    { href: "/settings", icon: Settings, label: "Settings", roles: ['patient', 'clinician', 'admin'] },
   ];
+
+  // Filter nav items based on user role
+  const visibleNavItems = navItems.filter(item => 
+    item.roles.includes(user?.role || 'patient')
+  );
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
@@ -53,7 +58,7 @@ export default function Layout({ children }: LayoutProps) {
       </div>
       
       <div className="flex-1 px-4 py-6 space-y-1">
-        {navItems.map((item) => (
+        {visibleNavItems.map((item) => (
           <Link key={item.href} href={item.href}>
             <div 
               className={cn(

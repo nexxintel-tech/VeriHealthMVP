@@ -14,21 +14,28 @@ import { fetchPatients, fetchAlerts, fetchDashboardStats } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
+import { getUser } from "@/lib/auth";
 
 export default function Dashboard() {
+  const user = getUser();
+  const isClinicianOrAdmin = user?.role === 'clinician' || user?.role === 'admin';
+
   const { data: patients = [], isLoading: patientsLoading } = useQuery({
     queryKey: ["patients"],
     queryFn: fetchPatients,
   });
 
+  // Only fetch alerts and stats for clinicians/admins
   const { data: alerts = [], isLoading: alertsLoading } = useQuery({
     queryKey: ["alerts"],
     queryFn: fetchAlerts,
+    enabled: isClinicianOrAdmin,
   });
 
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ["dashboard-stats"],
     queryFn: fetchDashboardStats,
+    enabled: isClinicianOrAdmin,
   });
 
   const highRiskPatients = patients.filter(p => p.riskLevel === "high" || p.riskLevel === "medium");
@@ -43,62 +50,66 @@ export default function Dashboard() {
           <p className="text-muted-foreground">Here's what's happening with your patients today.</p>
         </div>
 
-        {/* Stats Grid */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          {statsLoading ? (
-            <>
-              {[1, 2, 3, 4].map(i => (
-                <Card key={i} className="overflow-hidden border-none shadow-sm">
-                  <CardHeader className="pb-2">
-                    <Skeleton className="h-4 w-24" />
-                  </CardHeader>
-                  <CardContent>
-                    <Skeleton className="h-8 w-16" />
-                  </CardContent>
-                </Card>
-              ))}
-            </>
-          ) : (
-            <>
-              <StatCard 
-                title="Total Patients" 
-                value={stats?.totalPatients || 0} 
-                icon={Users} 
-                trend="+12% from last month" 
-                trendDirection="up"
-              />
-              <StatCard 
-                title="High Risk Patients" 
-                value={stats?.highRiskCount || 0} 
-                icon={Activity} 
-                trend="+2 new this week" 
-                trendDirection="down"
-                className="border-l-4 border-l-risk-high"
-              />
-              <StatCard 
-                title="Active Alerts" 
-                value={stats?.activeAlerts || 0} 
-                icon={AlertTriangle} 
-                trend="Requires attention" 
-                trendDirection="down"
-                className="border-l-4 border-l-warning"
-              />
-              <StatCard 
-                title="Avg. Risk Score" 
-                value={stats?.avgRiskScore || 0} 
-                icon={HeartPulse} 
-                trend="Stable" 
-                trendDirection="neutral"
-              />
-            </>
-          )}
-        </div>
+        {/* Stats Grid - Only for clinicians/admins */}
+        {isClinicianOrAdmin && (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            {statsLoading ? (
+              <>
+                {[1, 2, 3, 4].map(i => (
+                  <Card key={i} className="overflow-hidden border-none shadow-sm">
+                    <CardHeader className="pb-2">
+                      <Skeleton className="h-4 w-24" />
+                    </CardHeader>
+                    <CardContent>
+                      <Skeleton className="h-8 w-16" />
+                    </CardContent>
+                  </Card>
+                ))}
+              </>
+            ) : (
+              <>
+                <StatCard 
+                  title="Total Patients" 
+                  value={stats?.totalPatients || 0} 
+                  icon={Users} 
+                  trend="+12% from last month" 
+                  trendDirection="up"
+                />
+                <StatCard 
+                  title="High Risk Patients" 
+                  value={stats?.highRiskCount || 0} 
+                  icon={Activity} 
+                  trend="+2 new this week" 
+                  trendDirection="down"
+                  className="border-l-4 border-l-risk-high"
+                />
+                <StatCard 
+                  title="Active Alerts" 
+                  value={stats?.activeAlerts || 0} 
+                  icon={AlertTriangle} 
+                  trend="Requires attention" 
+                  trendDirection="down"
+                  className="border-l-4 border-l-warning"
+                />
+                <StatCard 
+                  title="Avg. Risk Score" 
+                  value={stats?.avgRiskScore || 0} 
+                  icon={HeartPulse} 
+                  trend="Stable" 
+                  trendDirection="neutral"
+                />
+              </>
+            )}
+          </div>
+        )}
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-          {/* High Risk Patients List */}
-          <Card className="col-span-4 border-none shadow-md">
+          {/* High Risk Patients List (or Patient's own data for patient role) */}
+          <Card className={isClinicianOrAdmin ? "col-span-4 border-none shadow-md" : "col-span-7 border-none shadow-md"}>
             <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>High Priority Attention Needed</CardTitle>
+              <CardTitle>
+                {isClinicianOrAdmin ? "High Priority Attention Needed" : "My Health Overview"}
+              </CardTitle>
               <Button variant="ghost" size="sm" className="text-primary" asChild>
                 <Link href="/patients">View All</Link>
               </Button>
@@ -144,11 +155,12 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          {/* Recent Alerts */}
-          <Card className="col-span-3 border-none shadow-md">
-            <CardHeader>
-              <CardTitle>Recent Alerts</CardTitle>
-            </CardHeader>
+          {/* Recent Alerts - Only for clinicians/admins */}
+          {isClinicianOrAdmin && (
+            <Card className="col-span-3 border-none shadow-md">
+              <CardHeader>
+                <CardTitle>Recent Alerts</CardTitle>
+              </CardHeader>
             <CardContent>
               {alertsLoading ? (
                 <div className="space-y-4">
@@ -178,6 +190,7 @@ export default function Dashboard() {
               )}
             </CardContent>
           </Card>
+          )}
         </div>
       </div>
     </Layout>

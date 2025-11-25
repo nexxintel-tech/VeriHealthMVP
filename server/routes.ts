@@ -286,17 +286,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user!.id;
       const userRole = req.user!.role;
 
-      // Fetch patients based on role
+      // Fetch patients based on role with proper query chaining
       let patientsQuery = supabase
         .from("patients")
-        .select("*")
-        .order("created_at", { ascending: false });
+        .select("*");
 
-      // Note: user_id column doesn't exist in current schema
-      // For now, all users can see all patients
-      // TODO: Add user_id column to patients table for proper RLS
+      // Role-based filtering: patients only see their own data
+      if (userRole === 'patient') {
+        patientsQuery = patientsQuery.eq('user_id', userId);
+      }
 
-      const { data: patients, error: patientsError } = await patientsQuery;
+      // Apply ordering and execute query
+      const { data: patients, error: patientsError } = await patientsQuery.order("created_at", { ascending: false });
 
       if (patientsError) throw patientsError;
 
@@ -369,8 +370,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (patientError) throw patientError;
 
-      // Note: user_id column doesn't exist in current schema
-      // TODO: Add user_id column to patients table for proper RLS
+      // Role-based access control: patients can only view their own data
+      if (userRole === 'patient' && patient.user_id !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
 
       // Fetch latest risk score
       const { data: riskScores } = await supabase
@@ -415,8 +418,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user!.id;
       const userRole = req.user!.role;
 
-      // Note: user_id column doesn't exist in current schema
-      // TODO: Add user_id column to patients table for proper RLS
+      // Verify patient ownership for patient role users
+      const { data: patient } = await supabase
+        .from("patients")
+        .select("user_id")
+        .eq("id", id)
+        .single();
+
+      if (userRole === 'patient' && patient?.user_id !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
 
       let query = supabase
         .from("vital_readings")
