@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { fetchPendingClinicians, approveClinician, rejectClinician, type PendingClinician } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,11 +20,12 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle2, XCircle, Clock } from "lucide-react";
+import { CheckCircle2, XCircle, Clock, ArrowLeft } from "lucide-react";
 
 export function ClinicianApprovals() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, navigate] = useLocation();
 
   const { data: clinicians, isLoading, error } = useQuery({
     queryKey: ["pending-clinicians"],
@@ -128,6 +130,17 @@ export function ClinicianApprovals() {
 
   return (
     <div className="container mx-auto p-6">
+      <div className="mb-4">
+        <Button
+          variant="ghost"
+          onClick={() => navigate("/")}
+          className="gap-2"
+          data-testid="button-back"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Back to Dashboard
+        </Button>
+      </div>
       <Card>
         <CardHeader>
           <CardTitle data-testid="title-approvals">Clinician Approvals</CardTitle>
