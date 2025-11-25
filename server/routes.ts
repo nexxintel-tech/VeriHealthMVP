@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import jwt from 'jsonwebtoken';
 import { supabase } from "./supabase";
 import { authenticateUser, requireRole } from "./middleware/auth";
 
@@ -119,28 +120,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { password, access_token } = req.body;
 
+      // Validate required fields
       if (!password) {
         return res.status(400).json({ error: "Password is required" });
       }
 
       if (!access_token) {
-        return res.status(400).json({ error: "Invalid reset token" });
+        return res.status(400).json({ error: "Reset token is required" });
       }
 
-      // Verify the access token and get user
-      const { data: { user }, error: authError } = await supabase.auth.getUser(access_token);
+      // Get JWT secret from environment
+      const jwtSecret = process.env.SUPABASE_JWT_SECRET;
+      if (!jwtSecret) {
+        console.error("SUPABASE_JWT_SECRET not configured");
+        return res.status(500).json({ error: "Server configuration error" });
+      }
 
-      if (authError || !user) {
-        return res.status(401).json({ error: "Invalid or expired reset token" });
+      // Verify the JWT token
+      let decoded: any;
+      try {
+        decoded = jwt.verify(access_token, jwtSecret);
+      } catch (jwtError: any) {
+        console.error("JWT verification failed:", jwtError.message);
+        return res.status(401).json({ 
+          error: "Invalid or expired reset token. Please request a new password reset link." 
+        });
+      }
+
+      // Extract user ID from token
+      const userId = decoded.sub;
+      if (!userId) {
+        return res.status(401).json({ error: "Invalid token format" });
       }
 
       // Update the user's password using admin API
       const { error: updateError } = await supabase.auth.admin.updateUserById(
-        user.id,
+        userId,
         { password: password }
       );
 
-      if (updateError) throw updateError;
+      if (updateError) {
+        console.error("Update password error:", updateError);
+        throw updateError;
+      }
+
+      // Optionally revoke existing sessions for security
+      // await supabase.auth.admin.signOut(access_token);
 
       res.json({ 
         message: "Password reset successfully. Please log in with your new password."

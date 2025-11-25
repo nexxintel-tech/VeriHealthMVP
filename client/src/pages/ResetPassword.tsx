@@ -15,13 +15,18 @@ export default function ResetPassword() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
-    // Extract access token from URL hash (Supabase sends it in the URL)
+    // Extract access_token from URL hash (Supabase recovery emails send this)
     const hash = window.location.hash;
     const params = new URLSearchParams(hash.substring(1));
-    const access = params.get('access_token');
+    const token = params.get('access_token');
+    const type = params.get('type');
     
-    if (access) {
-      setAccessToken(access);
+    // Verify this is a recovery link
+    if (token && type === 'recovery') {
+      setAccessToken(token);
+    } else if (token) {
+      // Token exists but not a recovery type
+      setAccessToken(token);
     } else {
       toast({
         title: "Invalid reset link",
