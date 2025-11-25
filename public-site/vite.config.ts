@@ -13,7 +13,7 @@ export default defineConfig({
     port: 5001,
     host: '0.0.0.0',
     // Allow all hosts for Replit's dynamic preview URLs
-    allowedHosts: 'all',
+    allowedHosts: true,
   },
   build: {
     outDir: 'dist',
