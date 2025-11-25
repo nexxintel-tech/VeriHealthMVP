@@ -1,8 +1,15 @@
 @import "tailwindcss";
 
+@theme {
+  /* Custom color variables for medical theme */
+  --color-border: #e5e7eb;
+  --color-background: #ffffff;
+  --color-foreground: #111827;
+}
+
 @layer base {
   * {
-    @apply border-border;
+    border-color: var(--color-border);
   }
   
   body {
