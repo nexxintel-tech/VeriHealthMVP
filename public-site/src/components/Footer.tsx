@@ -11,7 +11,11 @@ export default function Footer() {
           {/* Brand */}
           <div className="col-span-1 md:col-span-2">
             <div className="flex items-center mb-4">
-              <span className="font-heading font-bold text-xl text-gray-900">VeriHealth</span>
+              <img 
+                src="/verihealth-logo.png" 
+                alt="VeriHealth" 
+                className="h-8 w-auto object-contain"
+              />
             </div>
             <p className="text-gray-600 text-sm max-w-md mb-4">
               Advanced remote patient monitoring solutions with AI-powered risk insights. 

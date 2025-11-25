@@ -25,7 +25,11 @@ export default function Navbar() {
           {/* Logo */}
           <Link href="/">
             <div className="flex items-center cursor-pointer group">
-              <span className="font-heading font-bold text-xl text-gray-900 group-hover:text-medical-blue-600 transition-colors">VeriHealth</span>
+              <img 
+                src="/verihealth-logo.png" 
+                alt="VeriHealth" 
+                className="h-8 w-auto object-contain transition-transform group-hover:scale-105"
+              />
             </div>
           </Link>
 
