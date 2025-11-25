@@ -14,6 +14,7 @@ import ResetPassword from "@/pages/ResetPassword";
 import ConfirmEmail from "@/pages/ConfirmEmail";
 import PatientList from "@/pages/PatientList";
 import PatientDetail from "@/pages/PatientDetail";
+import Alerts from "@/pages/Alerts";
 import Settings from "@/pages/Settings";
 
 function Router() {
@@ -40,6 +41,11 @@ function Router() {
       <Route path="/patients/:id">
         <ProtectedRoute>
           <PatientDetail />
+        </ProtectedRoute>
+      </Route>
+      <Route path="/alerts">
+        <ProtectedRoute>
+          <Alerts />
         </ProtectedRoute>
       </Route>
       <Route path="/settings">
