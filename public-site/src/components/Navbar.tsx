@@ -21,20 +21,18 @@ export default function Navbar() {
   return (
     <nav className="bg-white border-b border-gray-200 sticky top-0 z-50 backdrop-blur-sm bg-white/95">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center h-16">
-          {/* Logo */}
+        <div className="flex justify-center items-center h-16 relative">
+          {/* Centered Logo/Title */}
           <Link href="/">
-            <div className="flex items-center cursor-pointer group">
-              <img 
-                src="/verihealth-logo.png" 
-                alt="VeriHealth" 
-                className="h-10 w-auto object-contain transition-transform group-hover:scale-105"
-              />
+            <div className="flex items-center cursor-pointer group absolute left-1/2 -translate-x-1/2">
+              <span className="text-2xl font-bold font-heading bg-gradient-to-r from-medical-blue-600 to-medical-blue-500 bg-clip-text text-transparent group-hover:from-medical-blue-700 group-hover:to-medical-blue-600 transition-all">
+                VeriHealth
+              </span>
             </div>
           </Link>
 
           {/* Desktop Navigation */}
-          <div className="hidden md:flex items-center gap-8">
+          <div className="hidden md:flex items-center gap-8 ml-auto">
             {navLinks.map((link) => (
               <Link key={link.href} href={link.href}>
                 <span
