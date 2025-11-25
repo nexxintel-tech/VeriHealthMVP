@@ -2,9 +2,10 @@
 
 ## Executive Summary
 
-**Status:** ✅ RBAC Security Fixed  
+**Status:** ✅ RBAC Security Fixed & Verified  
 **Critical Issue:** Resolved - Patients can no longer access other patients' PHI  
-**Completion Date:** November 25, 2025
+**Completion Date:** November 25, 2025  
+**Architect Review:** ✅ Passed - Security vulnerability confirmed closed
 
 ## Changes Implemented
 
@@ -24,10 +25,14 @@ ALTER TABLE patients ADD COLUMN user_id VARCHAR REFERENCES users(id);
 - ✅ Clinicians/Admins: See ALL patients
 - ✅ Patients: See ONLY their own patient records (filtered by `user_id`)
 ```typescript
+let patientsQuery = supabase.from("patients").select("*");
 if (userRole === 'patient') {
   patientsQuery = patientsQuery.eq('user_id', userId);
 }
+// Filtered query is executed here
+const { data: patients } = await patientsQuery.order("created_at", { ascending: false });
 ```
+**Critical Fix:** Moved `.order()` to the final await to ensure filtered query is executed (Supabase query builder returns new instances)
 
 **`GET /api/patients/:id`** - Get Single Patient
 - ✅ Added ownership check for patient role
