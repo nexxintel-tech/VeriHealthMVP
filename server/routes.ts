@@ -129,33 +129,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Reset token is required" });
       }
 
-      // Get JWT secret from environment
-      const jwtSecret = process.env.SUPABASE_JWT_SECRET;
-      if (!jwtSecret) {
-        console.error("SUPABASE_JWT_SECRET not configured");
-        return res.status(500).json({ error: "Server configuration error" });
-      }
+      // Verify the token by getting the user from Supabase
+      // This validates that the token is authentic and not forged
+      const { data: { user }, error: verifyError } = await supabase.auth.getUser(access_token);
 
-      // Verify the JWT token
-      let decoded: any;
-      try {
-        decoded = jwt.verify(access_token, jwtSecret);
-      } catch (jwtError: any) {
-        console.error("JWT verification failed:", jwtError.message);
+      if (verifyError || !user) {
+        console.error("Token verification failed:", verifyError?.message);
         return res.status(401).json({ 
           error: "Invalid or expired reset token. Please request a new password reset link." 
         });
       }
 
-      // Extract user ID from token
-      const userId = decoded.sub;
-      if (!userId) {
-        return res.status(401).json({ error: "Invalid token format" });
-      }
-
       // Update the user's password using admin API
       const { error: updateError } = await supabase.auth.admin.updateUserById(
-        userId,
+        user.id,
         { password: password }
       );
 
@@ -163,9 +150,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("Update password error:", updateError);
         throw updateError;
       }
-
-      // Optionally revoke existing sessions for security
-      // await supabase.auth.admin.signOut(access_token);
 
       res.json({ 
         message: "Password reset successfully. Please log in with your new password."
