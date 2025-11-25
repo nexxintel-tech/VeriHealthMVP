@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'wouter';
-import { ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 const slides = [
   {
@@ -104,15 +104,6 @@ export default function HeroSlider() {
                 {slide.subtitle}
               </p>
               <div className="flex flex-col sm:flex-row gap-4 justify-center items-center animate-fade-in-delay-2">
-                <Link href="/contact">
-                  <button
-                    className="px-8 py-4 bg-white/95 backdrop-blur-sm border-2 border-white text-medical-blue-700 rounded-lg font-semibold hover:bg-white hover:scale-105 transition-all shadow-xl inline-flex items-center justify-center gap-2"
-                    data-testid="button-request-demo"
-                  >
-                    Request Demo
-                    <ArrowRight className="h-5 w-5" />
-                  </button>
-                </Link>
                 <Link href="/about">
                   <button
                     className="px-8 py-4 bg-white/10 backdrop-blur-sm border-2 border-white text-white rounded-lg font-semibold hover:bg-white/20 hover:scale-105 transition-all shadow-xl inline-flex items-center justify-center gap-2"
