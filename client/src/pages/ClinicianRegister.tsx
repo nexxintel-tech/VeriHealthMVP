@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { Eye, EyeOff } from "lucide-react";
 
 const clinicianRegisterSchema = z.object({
   email: z.string().email("Please enter a valid email"),
@@ -45,6 +46,8 @@ export function ClinicianRegister() {
   const [isLoading, setIsLoading] = useState(false);
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [selectedInstitution, setSelectedInstitution] = useState<string>("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const {
     register,
@@ -163,13 +166,24 @@ export function ClinicianRegister() {
 
               <div className="space-y-2">
                 <Label htmlFor="password">Password *</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  data-testid="input-password"
-                  {...register("password")}
-                  placeholder="Minimum 6 characters"
-                />
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    data-testid="input-password"
+                    {...register("password")}
+                    placeholder="Minimum 6 characters"
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    data-testid="button-toggle-password"
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
                 {errors.password && (
                   <p className="text-sm text-red-500" data-testid="error-password">{errors.password.message}</p>
                 )}
@@ -177,13 +191,24 @@ export function ClinicianRegister() {
 
               <div className="space-y-2">
                 <Label htmlFor="confirmPassword">Confirm Password *</Label>
-                <Input
-                  id="confirmPassword"
-                  type="password"
-                  data-testid="input-confirmPassword"
-                  {...register("confirmPassword")}
-                  placeholder="Re-enter password"
-                />
+                <div className="relative">
+                  <Input
+                    id="confirmPassword"
+                    type={showConfirmPassword ? "text" : "password"}
+                    data-testid="input-confirmPassword"
+                    {...register("confirmPassword")}
+                    placeholder="Re-enter password"
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    data-testid="button-toggle-confirm-password"
+                  >
+                    {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
                 {errors.confirmPassword && (
                   <p className="text-sm text-red-500" data-testid="error-confirmPassword">{errors.confirmPassword.message}</p>
                 )}
