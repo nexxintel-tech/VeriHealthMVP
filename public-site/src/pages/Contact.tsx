@@ -99,9 +99,9 @@ export default function Contact() {
                   <div>
                     <h3 className="font-semibold text-gray-900 mb-1">Office</h3>
                     <p className="text-gray-600">
-                      123 Healthcare Boulevard<br />
-                      Medical District, CA 94102<br />
-                      United States
+                      House 2, Close 3, Ofem Ibor Street<br />
+                      Wumba, Abuja<br />
+                      Nigeria
                     </p>
                   </div>
                 </div>
