@@ -66,6 +66,15 @@ task = "shell.exec"
 args = "npm run dev"
 waitForPort = 5000
 
+[[workflows.workflow]]
+name = "Public-site"
+mode = "sequential"
+author = 49859916
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd public-site && npm run dev"
+
 [agent]
 mockupState = "FULLSTACK"
 integrations = ["resend:1.0.0"]
