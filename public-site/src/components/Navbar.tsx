@@ -1,10 +1,15 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'wouter';
 import { Menu, X } from 'lucide-react';
 
 export default function Navbar() {
   const [location] = useLocation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  useEffect(() => {
+    setIsLoaded(true);
+  }, []);
 
   const navLinks = [
     { href: '/', label: 'Home' },
@@ -19,15 +24,28 @@ export default function Navbar() {
     return location.startsWith(href);
   };
 
+  const title = "VeriHealth";
+
   return (
     <nav className="bg-white border-b border-gray-200 sticky top-0 z-50 backdrop-blur-sm bg-white/95">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
-          {/* Left-aligned Logo/Title */}
+          {/* Left-aligned Animated Logo/Title */}
           <Link href="/">
-            <div className="flex items-center cursor-pointer group">
-              <span className="text-2xl font-bold font-heading bg-gradient-to-r from-medical-blue-600 to-medical-blue-500 bg-clip-text text-transparent group-hover:from-medical-blue-700 group-hover:to-medical-blue-600 transition-all">
-                VeriHealth
+            <div className="flex items-center cursor-pointer group hover:scale-[1.02] active:scale-[0.98] transition-transform duration-200">
+              <span className="text-2xl font-bold font-heading relative overflow-hidden">
+                {title.split('').map((letter, i) => (
+                  <span
+                    key={i}
+                    className="animated-letter inline-block"
+                    style={{
+                      animationDelay: `${i * 0.08}s`,
+                      opacity: isLoaded ? 1 : 0,
+                    }}
+                  >
+                    {letter}
+                  </span>
+                ))}
               </span>
             </div>
           </Link>
@@ -98,6 +116,37 @@ export default function Navbar() {
           </div>
         )}
       </div>
+      
+      {/* CSS for letter animations */}
+      <style>{`
+        @keyframes letterSlideIn {
+          0% {
+            opacity: 0;
+            transform: translateY(20px);
+          }
+          100% {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        
+        @keyframes gradientShift {
+          0% { background-position: 0% 50%; }
+          50% { background-position: 100% 50%; }
+          100% { background-position: 0% 50%; }
+        }
+        
+        .animated-letter {
+          background: linear-gradient(90deg, #2563eb, #0891b2, #7c3aed, #2563eb);
+          background-size: 300% 100%;
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
+          animation: 
+            letterSlideIn 0.5s ease-out forwards,
+            gradientShift 4s ease infinite;
+        }
+      `}</style>
     </nav>
   );
 }
