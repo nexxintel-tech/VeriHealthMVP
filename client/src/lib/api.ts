@@ -290,3 +290,56 @@ export async function rejectClinician(clinicianId: string): Promise<void> {
     throw new Error(error.error || "Failed to reject clinician");
   }
 }
+
+// Top performing clinicians
+export interface TopPerformer {
+  id: string;
+  name: string;
+  specialty: string;
+  avgResponseTime: string;
+  avgResponseTimeMs: number | null;
+  alertsRespondedTo: number;
+  patientOutcomeRate: number;
+  performanceScore: number;
+}
+
+export async function fetchTopPerformers(): Promise<TopPerformer[]> {
+  const response = await fetch("/api/clinicians/top-performers", {
+    headers: getAuthHeaders(),
+  });
+  
+  if (response.status === 401) {
+    throw new Error("Unauthorized - please log in again");
+  }
+  
+  if (!response.ok) {
+    throw new Error("Failed to fetch top performers");
+  }
+  
+  return response.json();
+}
+
+// Respond to an alert (marks as read and tracks response time)
+export async function respondToAlert(alertId: string): Promise<Alert> {
+  const response = await fetch(`/api/alerts/${alertId}/respond`, {
+    method: "PATCH",
+    headers: {
+      ...getAuthHeaders(),
+      "Content-Type": "application/json",
+    },
+  });
+  
+  if (response.status === 401) {
+    throw new Error("Unauthorized - please log in again");
+  }
+  
+  if (response.status === 403) {
+    throw new Error("Access denied");
+  }
+  
+  if (!response.ok) {
+    throw new Error("Failed to respond to alert");
+  }
+  
+  return response.json();
+}

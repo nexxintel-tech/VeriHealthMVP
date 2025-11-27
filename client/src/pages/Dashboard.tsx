@@ -9,6 +9,7 @@ import {
 import Layout from "@/components/layout/Layout";
 import { StatCard } from "@/components/dashboard/StatCard";
 import { RiskBadge } from "@/components/dashboard/RiskBadge";
+import { TopPerformingClinicians } from "@/components/dashboard/TopPerformingClinicians";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fetchPatients, fetchAlerts, fetchDashboardStats } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -192,6 +193,13 @@ export default function Dashboard() {
           </Card>
           )}
         </div>
+
+        {/* Top Performing Clinicians - Only for clinicians/admins */}
+        {isClinicianOrAdmin && (
+          <div className="grid gap-4 md:grid-cols-1">
+            <TopPerformingClinicians />
+          </div>
+        )}
       </div>
     </Layout>
   );

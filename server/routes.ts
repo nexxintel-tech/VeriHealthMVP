@@ -929,6 +929,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         riskScoresByPatient[rs.patient_id].push({ score: rs.score, createdAt: rs.created_at });
       });
 
+      // Sort each patient's risk scores by timestamp to ensure correct order
+      Object.values(riskScoresByPatient).forEach(scores => {
+        scores.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      });
+
       // Calculate patient improvements (where risk score decreased)
       let totalPatients = 0;
       let patientsImproved = 0;
@@ -1003,6 +1008,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       const clinicianId = req.user!.id;
 
+      // First verify the alert exists and hasn't been responded to already
+      const { data: existingAlert, error: fetchError } = await supabase
+        .from("alerts")
+        .select("id, responded_by_id")
+        .eq("id", id)
+        .single();
+
+      if (fetchError || !existingAlert) {
+        return res.status(404).json({ error: "Alert not found" });
+      }
+
+      // If already responded to, don't overwrite the original responder
+      if (existingAlert.responded_by_id) {
+        return res.status(400).json({ error: "Alert already responded to" });
+      }
+
       const { data, error } = await supabase
         .from("alerts")
         .update({ 
@@ -1011,6 +1032,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           responded_at: new Date().toISOString()
         })
         .eq("id", id)
+        .is("responded_by_id", null) // Only update if not already responded
         .select()
         .single();
 
