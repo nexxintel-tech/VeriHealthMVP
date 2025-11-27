@@ -143,36 +143,36 @@ export default function Plans() {
   return (
     <div className="bg-white">
       {/* Hero Section */}
-      <section className="relative overflow-hidden bg-gradient-to-br from-slate-900 via-medical-blue-900 to-slate-900 py-24 lg:py-32">
+      <section className="relative overflow-hidden bg-gradient-to-br from-slate-900 via-medical-blue-900 to-slate-900 py-12 lg:py-16">
         <div className="absolute inset-0">
           <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-medical-blue-500/20 via-transparent to-transparent"></div>
-          <div className="absolute top-0 left-1/4 w-96 h-96 bg-medical-blue-500/10 rounded-full blur-3xl"></div>
-          <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-purple-500/10 rounded-full blur-3xl"></div>
+          <div className="absolute top-0 left-1/4 w-64 h-64 bg-medical-blue-500/10 rounded-full blur-3xl"></div>
+          <div className="absolute bottom-0 right-1/4 w-64 h-64 bg-purple-500/10 rounded-full blur-3xl"></div>
         </div>
         
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
           <div className="text-center max-w-4xl mx-auto">
-            <div className="inline-flex items-center gap-2 bg-white/10 backdrop-blur-sm border border-white/20 rounded-full px-4 py-2 mb-6">
-              <Sparkles className="h-4 w-4 text-yellow-400" />
-              <span className="text-sm text-white/90">Simple, transparent pricing</span>
+            <div className="inline-flex items-center gap-2 bg-white/10 backdrop-blur-sm border border-white/20 rounded-full px-3 py-1.5 mb-4">
+              <Sparkles className="h-3.5 w-3.5 text-yellow-400" />
+              <span className="text-xs text-white/90">Simple, transparent pricing</span>
             </div>
             
-            <h1 className="text-4xl sm:text-5xl lg:text-7xl font-heading font-bold text-white mb-6 tracking-tight">
+            <h1 className="text-3xl sm:text-4xl lg:text-5xl font-heading font-bold text-white mb-4 tracking-tight">
               Choose Your
-              <span className="block bg-gradient-to-r from-medical-blue-400 via-cyan-400 to-teal-400 bg-clip-text text-transparent">
+              <span className="inline sm:block bg-gradient-to-r from-medical-blue-400 via-cyan-400 to-teal-400 bg-clip-text text-transparent ml-2 sm:ml-0">
                 Health Plan
               </span>
             </h1>
             
-            <p className="text-lg lg:text-xl text-slate-300 max-w-2xl mx-auto mb-10 leading-relaxed">
+            <p className="text-base lg:text-lg text-slate-300 max-w-2xl mx-auto mb-6 leading-relaxed">
               Whether you're a patient monitoring your health or an institution scaling your program, we have the perfect plan for you.
             </p>
 
             {/* Billing Toggle */}
-            <div className="inline-flex items-center bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-2">
+            <div className="inline-flex items-center bg-white/5 backdrop-blur-md border border-white/10 rounded-xl p-1.5">
               <button
                 onClick={() => setBillingPeriod('monthly')}
-                className={`relative px-8 py-3.5 rounded-xl text-sm font-semibold transition-all duration-300 ${
+                className={`relative px-6 py-2.5 rounded-lg text-sm font-semibold transition-all duration-300 ${
                   billingPeriod === 'monthly'
                     ? 'bg-white text-slate-900 shadow-lg shadow-white/25'
                     : 'text-white/70 hover:text-white'
@@ -183,7 +183,7 @@ export default function Plans() {
               </button>
               <button
                 onClick={() => setBillingPeriod('annual')}
-                className={`relative px-8 py-3.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${
+                className={`relative px-6 py-2.5 rounded-lg text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${
                   billingPeriod === 'annual'
                     ? 'bg-white text-slate-900 shadow-lg shadow-white/25'
                     : 'text-white/70 hover:text-white'
@@ -191,7 +191,7 @@ export default function Plans() {
                 data-testid="button-billing-annual"
               >
                 Annual
-                <span className="bg-gradient-to-r from-emerald-500 to-green-500 text-white text-xs px-2.5 py-1 rounded-full font-bold">
+                <span className="bg-gradient-to-r from-emerald-500 to-green-500 text-white text-xs px-2 py-0.5 rounded-full font-bold">
                   -20%
                 </span>
               </button>
