@@ -62,6 +62,11 @@ function Router() {
           <AdminPanel />
         </ProtectedRoute>
       </Route>
+      <Route path="/admin">
+        <ProtectedRoute>
+          <AdminPanel />
+        </ProtectedRoute>
+      </Route>
       <Route path="/settings">
         <ProtectedRoute>
           <Settings />
