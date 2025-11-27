@@ -3,6 +3,7 @@ import Navbar from './components/Navbar';
 import Footer from './components/Footer';
 import Home from './pages/Home';
 import About from './pages/About';
+import Plans from './pages/Plans';
 import Shop from './pages/Shop';
 import Contact from './pages/Contact';
 import LogoPreview from './pages/LogoPreview';
@@ -83,6 +84,7 @@ function App() {
         <Switch>
           <Route path="/" component={Home} />
           <Route path="/about" component={About} />
+          <Route path="/plans" component={Plans} />
           <Route path="/shop" component={Shop} />
           <Route path="/contact" component={Contact} />
           <Route path="/portal" component={PortalRedirect} />
