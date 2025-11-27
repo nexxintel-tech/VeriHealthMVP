@@ -36,10 +36,18 @@ export interface Alert {
 }
 
 export interface DashboardStats {
-  totalPatients: number;
-  highRiskCount: number;
-  activeAlerts: number;
-  avgRiskScore: number;
+  // Patient-focused stats (for clinicians/admins)
+  totalPatients?: number;
+  highRiskCount?: number;
+  activeAlerts?: number;
+  avgRiskScore?: number;
+  // Clinician-focused stats (for institution admins)
+  totalClinicians?: number;
+  approvedClinicians?: number;
+  pendingApprovals?: number;
+  avgPerformanceScore?: number;
+  // Flag to indicate which view type
+  isClinicianView?: boolean;
 }
 
 // Fetch all patients (with authentication)

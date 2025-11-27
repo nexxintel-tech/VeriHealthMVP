@@ -8,7 +8,7 @@ interface LoginCredentials {
 interface AuthUser {
   id: string;
   email: string;
-  role: 'patient' | 'clinician' | 'admin';
+  role: 'patient' | 'clinician' | 'admin' | 'institution_admin';
 }
 
 interface AuthSession {

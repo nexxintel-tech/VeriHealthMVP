@@ -440,8 +440,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Clinicians only see patients assigned to them
         patientsQuery = patientsQuery.eq('assigned_clinician_id', userId);
       } else if (userRole === 'institution_admin') {
-        // Institution admins see all patients in their institution
-        patientsQuery = patientsQuery.eq('institution_id', userInstitutionId);
+        // Institution admins don't have access to patient data - they manage clinicians
+        return res.status(403).json({ error: "Institution admins manage clinicians, not patients" });
       }
       // Admins see all patients (no filter)
 
@@ -527,8 +527,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (userRole === 'clinician' && patient.assigned_clinician_id !== userId) {
         return res.status(403).json({ error: "Access denied - patient not assigned to you" });
       }
-      if (userRole === 'institution_admin' && patient.institution_id !== userInstitutionId) {
-        return res.status(403).json({ error: "Access denied - patient not in your institution" });
+      if (userRole === 'institution_admin') {
+        return res.status(403).json({ error: "Institution admins manage clinicians, not patients" });
       }
 
       // Fetch latest risk score
@@ -588,8 +588,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (userRole === 'clinician' && patient?.assigned_clinician_id !== userId) {
         return res.status(403).json({ error: "Access denied - patient not assigned to you" });
       }
-      if (userRole === 'institution_admin' && patient?.institution_id !== userInstitutionId) {
-        return res.status(403).json({ error: "Access denied - patient not in your institution" });
+      if (userRole === 'institution_admin') {
+        return res.status(403).json({ error: "Institution admins manage clinicians, not patients" });
       }
 
       let query = supabase
@@ -616,13 +616,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Get all alerts (role-based access)
   // - Clinicians: see only alerts for patients assigned to them
-  // - Institution admins: see all alerts for patients in their institution
+  // - Institution admins: NO access (they manage clinicians, not patients)
   // - Admins: see all alerts
-  app.get("/api/alerts", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), async (req, res) => {
+  app.get("/api/alerts", authenticateUser, requireRole('clinician', 'admin'), async (req, res) => {
     try {
       const userId = req.user!.id;
       const userRole = req.user!.role;
-      const userInstitutionId = req.user!.institutionId;
 
       // First get the patient IDs this user can access
       let patientIds: string[] = [];
@@ -633,13 +632,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .from("patients")
           .select("id")
           .eq("assigned_clinician_id", userId);
-        patientIds = patients?.map(p => p.id) || [];
-      } else if (userRole === 'institution_admin') {
-        // Institution admins see alerts for all patients in their institution
-        const { data: patients } = await supabase
-          .from("patients")
-          .select("id")
-          .eq("institution_id", userInstitutionId);
         patientIds = patients?.map(p => p.id) || [];
       }
 
@@ -653,13 +645,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .order("timestamp", { ascending: false })
         .limit(50);
 
-      // Filter by patient IDs for non-admin roles
-      if (userRole !== 'admin' && patientIds.length > 0) {
+      // Filter by patient IDs for clinician role
+      if (userRole === 'clinician' && patientIds.length > 0) {
         alertsQuery = alertsQuery.in("patient_id", patientIds);
-      } else if (userRole !== 'admin' && patientIds.length === 0) {
+      } else if (userRole === 'clinician' && patientIds.length === 0) {
         // No patients assigned, return empty
         return res.json([]);
       }
+      // Admin sees all alerts (no filter)
 
       const { data: alerts, error } = await alertsQuery;
 
@@ -684,13 +677,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Mark alert as read (with ownership verification)
-  app.patch("/api/alerts/:id", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), async (req, res) => {
+  // Institution admins cannot access alerts - they manage clinicians, not patients
+  app.patch("/api/alerts/:id", authenticateUser, requireRole('clinician', 'admin'), async (req, res) => {
     try {
       const { id } = req.params;
       const { isRead } = req.body;
       const userId = req.user!.id;
       const userRole = req.user!.role;
-      const userInstitutionId = req.user!.institutionId;
 
       // First get the alert and verify access
       const { data: alert, error: alertError } = await supabase
@@ -703,21 +696,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Alert not found" });
       }
 
-      // Verify access based on role
-      if (userRole !== 'admin') {
+      // Verify access based on role (clinicians must own the patient)
+      if (userRole === 'clinician') {
         const { data: patient } = await supabase
           .from("patients")
-          .select("assigned_clinician_id, institution_id")
+          .select("assigned_clinician_id")
           .eq("id", alert.patient_id)
           .single();
 
-        if (userRole === 'clinician' && patient?.assigned_clinician_id !== userId) {
+        if (patient?.assigned_clinician_id !== userId) {
           return res.status(403).json({ error: "Access denied - patient not assigned to you" });
         }
-        if (userRole === 'institution_admin' && patient?.institution_id !== userInstitutionId) {
-          return res.status(403).json({ error: "Access denied - patient not in your institution" });
-        }
       }
+      // Admin can update any alert
 
       const { data, error } = await supabase
         .from("alerts")
@@ -736,19 +727,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get dashboard stats (role-based filtering)
+  // - Clinicians: see patient stats for their assigned patients
+  // - Institution admins: see clinician stats for their institution
+  // - Admins: see global patient stats
   app.get("/api/dashboard/stats", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), async (req, res) => {
     try {
       const userId = req.user!.id;
       const userRole = req.user!.role;
       const userInstitutionId = req.user!.institutionId;
 
-      // Get patient IDs this user can access
+      // Institution admins see clinician-focused stats
+      if (userRole === 'institution_admin') {
+        // Get clinicians in this institution
+        const { data: clinicians } = await supabase
+          .from('users')
+          .select('id, approval_status')
+          .eq('role', 'clinician')
+          .eq('institution_id', userInstitutionId);
+
+        const totalClinicians = clinicians?.length || 0;
+        const approvedClinicians = clinicians?.filter(c => c.approval_status === 'approved').length || 0;
+        const pendingApprovals = clinicians?.filter(c => c.approval_status === 'pending').length || 0;
+
+        // Get average performance score for approved clinicians
+        const clinicianIds = clinicians?.filter(c => c.approval_status === 'approved').map(c => c.id) || [];
+        
+        let avgPerformanceScore = 0;
+        if (clinicianIds.length > 0) {
+          // Get alerts responded to by these clinicians
+          const { data: respondedAlerts } = await supabase
+            .from('alerts')
+            .select('responded_by_id, timestamp, responded_at')
+            .in('responded_by_id', clinicianIds)
+            .not('responded_at', 'is', null);
+
+          // Calculate average response time
+          const responseTimes = respondedAlerts?.map(a => {
+            return new Date(a.responded_at!).getTime() - new Date(a.timestamp).getTime();
+          }).filter(t => t > 0) || [];
+
+          if (responseTimes.length > 0) {
+            const avgResponseMs = responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length;
+            // Score: faster = higher (max 100 for <5 min)
+            avgPerformanceScore = Math.max(0, Math.round(100 - (avgResponseMs / 60000 / 5) * 20));
+          }
+        }
+
+        return res.json({
+          totalClinicians,
+          approvedClinicians,
+          pendingApprovals,
+          avgPerformanceScore,
+          isClinicianView: true, // Flag to tell frontend this is clinician-focused
+        });
+      }
+
+      // Clinicians and admins see patient-focused stats
       let patientsQuery = supabase.from("patients").select("id");
       
       if (userRole === 'clinician') {
         patientsQuery = patientsQuery.eq('assigned_clinician_id', userId);
-      } else if (userRole === 'institution_admin') {
-        patientsQuery = patientsQuery.eq('institution_id', userInstitutionId);
       }
       // Admin sees all patients
 
@@ -764,6 +802,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           highRiskCount: 0,
           activeAlerts: 0,
           avgRiskScore: 0,
+          isClinicianView: false,
         });
       }
 
@@ -806,6 +845,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         highRiskCount,
         activeAlerts: activeAlerts || 0,
         avgRiskScore,
+        isClinicianView: false,
       });
     } catch (error) {
       console.error("Error fetching dashboard stats:", error);

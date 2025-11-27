@@ -4,7 +4,10 @@ import {
   Activity, 
   AlertTriangle, 
   HeartPulse, 
-  ArrowUpRight 
+  ArrowUpRight,
+  UserCheck,
+  Clock,
+  Award
 } from "lucide-react";
 import Layout from "@/components/layout/Layout";
 import { StatCard } from "@/components/dashboard/StatCard";
@@ -20,23 +23,27 @@ import { getUser } from "@/lib/auth";
 export default function Dashboard() {
   const user = getUser();
   const isClinicianOrAdmin = user?.role === 'clinician' || user?.role === 'admin';
+  const isInstitutionAdmin = user?.role === 'institution_admin';
+  const canViewPatients = isClinicianOrAdmin; // Institution admins cannot view patients
 
   const { data: patients = [], isLoading: patientsLoading } = useQuery({
     queryKey: ["patients"],
     queryFn: fetchPatients,
+    enabled: canViewPatients, // Only fetch for clinicians/admins
   });
 
-  // Only fetch alerts and stats for clinicians/admins
+  // Only fetch alerts for clinicians/admins (not institution admins)
   const { data: alerts = [], isLoading: alertsLoading } = useQuery({
     queryKey: ["alerts"],
     queryFn: fetchAlerts,
     enabled: isClinicianOrAdmin,
   });
 
+  // Fetch stats for clinicians, admins, and institution admins
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ["dashboard-stats"],
     queryFn: fetchDashboardStats,
-    enabled: isClinicianOrAdmin,
+    enabled: isClinicianOrAdmin || isInstitutionAdmin,
   });
 
   const highRiskPatients = patients.filter(p => p.riskLevel === "high" || p.riskLevel === "medium");
@@ -48,11 +55,15 @@ export default function Dashboard() {
         {/* Welcome Section */}
         <div className="flex flex-col gap-2">
           <h1 className="text-3xl font-heading font-bold tracking-tight text-foreground">Dashboard Overview</h1>
-          <p className="text-muted-foreground">Here's what's happening with your patients today.</p>
+          <p className="text-muted-foreground">
+            {isInstitutionAdmin 
+              ? "Here's an overview of your institution's clinicians and their performance."
+              : "Here's what's happening with your patients today."}
+          </p>
         </div>
 
-        {/* Stats Grid - Only for clinicians/admins */}
-        {isClinicianOrAdmin && (
+        {/* Stats Grid - Different views for different roles */}
+        {(isClinicianOrAdmin || isInstitutionAdmin) && (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             {statsLoading ? (
               <>
@@ -67,7 +78,42 @@ export default function Dashboard() {
                   </Card>
                 ))}
               </>
+            ) : isInstitutionAdmin ? (
+              /* Institution Admin sees clinician-focused stats */
+              <>
+                <StatCard 
+                  title="Total Clinicians" 
+                  value={stats?.totalClinicians || 0} 
+                  icon={Users} 
+                  trend="In your institution" 
+                  trendDirection="neutral"
+                />
+                <StatCard 
+                  title="Approved Clinicians" 
+                  value={stats?.approvedClinicians || 0} 
+                  icon={UserCheck} 
+                  trend="Active and approved" 
+                  trendDirection="up"
+                  className="border-l-4 border-l-green-500"
+                />
+                <StatCard 
+                  title="Pending Approvals" 
+                  value={stats?.pendingApprovals || 0} 
+                  icon={Clock} 
+                  trend="Requires review" 
+                  trendDirection={(stats?.pendingApprovals ?? 0) > 0 ? "down" : "neutral"}
+                  className="border-l-4 border-l-warning"
+                />
+                <StatCard 
+                  title="Avg. Performance" 
+                  value={stats?.avgPerformanceScore || 0} 
+                  icon={Award} 
+                  trend="Response time score" 
+                  trendDirection="neutral"
+                />
+              </>
             ) : (
+              /* Clinicians and Admins see patient-focused stats */
               <>
                 <StatCard 
                   title="Total Patients" 
@@ -104,6 +150,8 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* Patient/Alert sections - Not for institution admins */}
+        {!isInstitutionAdmin && (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
           {/* High Risk Patients List (or Patient's own data for patient role) */}
           <Card className={isClinicianOrAdmin ? "col-span-4 border-none shadow-md" : "col-span-7 border-none shadow-md"}>
@@ -193,9 +241,10 @@ export default function Dashboard() {
           </Card>
           )}
         </div>
+        )}
 
-        {/* Top Performing Clinicians - Only for clinicians/admins */}
-        {isClinicianOrAdmin && (
+        {/* Top Performing Clinicians - For clinicians, admins, and institution admins */}
+        {(isClinicianOrAdmin || isInstitutionAdmin) && (
           <div className="grid gap-4 md:grid-cols-1">
             <TopPerformingClinicians />
           </div>
