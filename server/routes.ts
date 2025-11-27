@@ -695,7 +695,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // First get the alert and verify access
       const { data: alert, error: alertError } = await supabase
         .from("alerts")
-        .select("*, patients(assigned_clinician_id, institution_id)")
+        .select("*, patient_id")
         .eq("id", id)
         .single();
 
@@ -704,11 +704,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Verify access based on role
-      if (userRole === 'clinician' && alert.patients?.assigned_clinician_id !== userId) {
-        return res.status(403).json({ error: "Access denied - patient not assigned to you" });
-      }
-      if (userRole === 'institution_admin' && alert.patients?.institution_id !== userInstitutionId) {
-        return res.status(403).json({ error: "Access denied - patient not in your institution" });
+      if (userRole !== 'admin') {
+        const { data: patient } = await supabase
+          .from("patients")
+          .select("assigned_clinician_id, institution_id")
+          .eq("id", alert.patient_id)
+          .single();
+
+        if (userRole === 'clinician' && patient?.assigned_clinician_id !== userId) {
+          return res.status(403).json({ error: "Access denied - patient not assigned to you" });
+        }
+        if (userRole === 'institution_admin' && patient?.institution_id !== userInstitutionId) {
+          return res.status(403).json({ error: "Access denied - patient not in your institution" });
+        }
       }
 
       const { data, error } = await supabase
@@ -965,10 +973,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get top performing clinicians (for dashboard widget)
+  // Shows top performers within the user's institution only
   app.get("/api/clinicians/top-performers", authenticateUser, async (req, res) => {
     try {
-      // Get all approved clinicians with their profiles
-      const { data: clinicians, error: cliniciansError } = await supabase
+      const userId = req.user!.id;
+      const userRole = req.user!.role;
+      const userInstitutionId = req.user!.institutionId;
+
+      // Build query for approved clinicians
+      let cliniciansQuery = supabase
         .from('users')
         .select(`
           id,
@@ -978,6 +991,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         `)
         .eq('role', 'clinician')
         .eq('approval_status', 'approved');
+
+      // Filter to same institution (except for system admin)
+      if (userRole !== 'admin' && userInstitutionId) {
+        cliniciansQuery = cliniciansQuery.eq('institution_id', userInstitutionId);
+      }
+
+      const { data: clinicians, error: cliniciansError } = await cliniciansQuery;
 
       if (cliniciansError) throw cliniciansError;
 
@@ -1025,11 +1045,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         avgResponseTimeByClinicianId[clinicianId] = times.reduce((a, b) => a + b, 0) / times.length;
       });
 
+      // Get patients with their assigned clinician to calculate per-clinician outcomes
+      const { data: patients } = await supabase
+        .from('patients')
+        .select('id, assigned_clinician_id')
+        .in('assigned_clinician_id', clinicianIds);
+
+      // Map patient IDs to their assigned clinician
+      const clinicianByPatientId: Record<string, string> = {};
+      patients?.forEach(p => {
+        if (p.assigned_clinician_id) {
+          clinicianByPatientId[p.id] = p.assigned_clinician_id;
+        }
+      });
+
       // Get risk score improvements (patient outcomes)
-      // For this, we track when risk scores decreased over time
+      const patientIds = patients?.map(p => p.id) || [];
       const { data: riskScores } = await supabase
         .from('risk_scores')
         .select('patient_id, score, created_at')
+        .in('patient_id', patientIds)
         .order('created_at', { ascending: true });
 
       // Group risk scores by patient and calculate improvement
@@ -1046,28 +1081,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
         scores.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
       });
 
-      // Calculate patient improvements (where risk score decreased)
-      let totalPatients = 0;
-      let patientsImproved = 0;
-      Object.values(riskScoresByPatient).forEach(scores => {
+      // Calculate per-clinician patient outcomes
+      const outcomesByClinicianId: Record<string, { total: number; improved: number }> = {};
+      Object.entries(riskScoresByPatient).forEach(([patientId, scores]) => {
+        const clinicianId = clinicianByPatientId[patientId];
+        if (!clinicianId) return;
+        
+        if (!outcomesByClinicianId[clinicianId]) {
+          outcomesByClinicianId[clinicianId] = { total: 0, improved: 0 };
+        }
+        
         if (scores.length >= 2) {
-          totalPatients++;
+          outcomesByClinicianId[clinicianId].total++;
           const firstScore = scores[0].score;
           const lastScore = scores[scores.length - 1].score;
           if (lastScore < firstScore) {
-            patientsImproved++;
+            outcomesByClinicianId[clinicianId].improved++;
           }
         }
       });
-
-      // Calculate institution improvement rate (shared metric for all clinicians in same institution)
-      const improvementRate = totalPatients > 0 ? Math.round((patientsImproved / totalPatients) * 100) : 0;
 
       // Build the top performers list
       const topPerformers = clinicians.map(clinician => {
         const profile = profilesByUserId[clinician.id];
         const avgResponseMs = avgResponseTimeByClinicianId[clinician.id];
         const alertsRespondedTo = responseTimesByClinicianId[clinician.id]?.length || 0;
+        const outcomes = outcomesByClinicianId[clinician.id];
+        
+        // Calculate per-clinician improvement rate
+        const improvementRate = outcomes && outcomes.total > 0
+          ? Math.round((outcomes.improved / outcomes.total) * 100)
+          : 0;
 
         // Convert response time to human-readable format
         let avgResponseTime = 'N/A';
@@ -1088,7 +1132,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const responseScore = Math.max(0, 50 - (avgResponseMs / 60000 / 5) * 10);
           performanceScore += responseScore;
         }
-        // Improvement rate contributes to score (max 50 points)
+        // Per-clinician improvement rate contributes to score (max 50 points)
         performanceScore += (improvementRate / 100) * 50;
 
         return {
@@ -1125,7 +1169,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // First verify the alert exists and check ownership
       const { data: existingAlert, error: fetchError } = await supabase
         .from("alerts")
-        .select("id, responded_by_id, patients(assigned_clinician_id)")
+        .select("id, responded_by_id, patient_id")
         .eq("id", id)
         .single();
 
@@ -1134,8 +1178,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Verify clinician owns this patient (admins can respond to any)
-      if (userRole === 'clinician' && existingAlert.patients?.assigned_clinician_id !== clinicianId) {
-        return res.status(403).json({ error: "Access denied - patient not assigned to you" });
+      if (userRole === 'clinician') {
+        const { data: patient } = await supabase
+          .from("patients")
+          .select("assigned_clinician_id")
+          .eq("id", existingAlert.patient_id)
+          .single();
+        
+        if (patient?.assigned_clinician_id !== clinicianId) {
+          return res.status(403).json({ error: "Access denied - patient not assigned to you" });
+        }
       }
 
       // If already responded to, don't overwrite the original responder
