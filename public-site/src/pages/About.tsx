@@ -49,21 +49,22 @@ export default function About() {
 
   return (
     <div className="bg-white">
-      {/* Hero Section */}
-      <section className="relative overflow-hidden bg-gradient-to-br from-medical-blue-600 to-medical-blue-800 text-white py-20 lg:py-32">
-        <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1559757175-5700dde675bc?auto=format&fit=crop&q=80')] bg-cover bg-center opacity-10 mix-blend-overlay"></div>
-        <div className="relative max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-          <h1 className="text-4xl lg:text-6xl font-heading font-bold mb-6">
-            About VeriHealth
-          </h1>
-          <p className="text-xl lg:text-2xl text-blue-100">
-            Pioneering the future of remote patient monitoring with technology that saves lives
-          </p>
+      {/* Compact Hero Section */}
+      <section className="relative bg-gradient-to-r from-slate-900 via-medical-blue-900 to-slate-900 text-white py-6 lg:py-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <h1 className="text-2xl sm:text-3xl font-heading font-bold">
+              About <span className="bg-gradient-to-r from-medical-blue-400 to-cyan-400 bg-clip-text text-transparent">VeriHealth</span>
+            </h1>
+            <p className="text-sm text-slate-400">
+              Pioneering the future of remote patient monitoring
+            </p>
+          </div>
         </div>
       </section>
 
       {/* Mission Section */}
-      <section className="py-20 lg:py-32">
+      <section className="py-10 lg:py-14">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid lg:grid-cols-2 gap-12 items-center">
             <div>
@@ -97,7 +98,7 @@ export default function About() {
       </section>
 
       {/* Values Section */}
-      <section className="py-20 lg:py-32 bg-gray-50">
+      <section className="py-10 lg:py-14 bg-gray-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-16">
             <h2 className="text-3xl lg:text-5xl font-heading font-bold text-gray-900 mb-4">
@@ -127,7 +128,7 @@ export default function About() {
       </section>
 
       {/* Team Section */}
-      <section className="py-20 lg:py-32">
+      <section className="py-10 lg:py-14">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-16">
             <h2 className="text-3xl lg:text-5xl font-heading font-bold text-gray-900 mb-4">
@@ -158,7 +159,7 @@ export default function About() {
       </section>
 
       {/* Stats Section */}
-      <section className="py-20 lg:py-32 bg-medical-blue-600 text-white">
+      <section className="py-10 lg:py-14 bg-medical-blue-600 text-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-16">
             <h2 className="text-3xl lg:text-5xl font-heading font-bold mb-4">

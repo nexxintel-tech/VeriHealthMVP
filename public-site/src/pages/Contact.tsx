@@ -41,20 +41,22 @@ export default function Contact() {
 
   return (
     <div className="bg-white min-h-screen">
-      {/* Hero Section */}
-      <section className="bg-gradient-to-br from-medical-blue-600 to-medical-blue-800 text-white py-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-          <h1 className="text-4xl lg:text-6xl font-heading font-bold mb-6">
-            Get in Touch
-          </h1>
-          <p className="text-xl lg:text-2xl text-blue-100 max-w-3xl mx-auto">
-            Have questions? We're here to help you transform patient care
-          </p>
+      {/* Compact Hero Section */}
+      <section className="bg-gradient-to-r from-slate-900 via-medical-blue-900 to-slate-900 text-white py-6 lg:py-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <h1 className="text-2xl sm:text-3xl font-heading font-bold">
+              Get in <span className="bg-gradient-to-r from-medical-blue-400 to-cyan-400 bg-clip-text text-transparent">Touch</span>
+            </h1>
+            <p className="text-sm text-slate-400">
+              We're here to help you transform patient care
+            </p>
+          </div>
         </div>
       </section>
 
       {/* Contact Section */}
-      <section className="py-20">
+      <section className="py-10 lg:py-14">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid lg:grid-cols-2 gap-12">
             {/* Contact Info */}
