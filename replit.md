@@ -92,6 +92,39 @@ The VeriHealth platform consists of two separate web applications:
 - Reason: Resend requires verified domain before sending to external addresses
 - Next steps: Acquire custom domain, verify in Resend dashboard, set `ENABLE_EMAIL_CONFIRMATION=true`
 
+### Admin Panel (System Admin Only)
+
+**User Management**
+- Full user listing with search and role-based filtering
+- Enable/disable user accounts (Supabase Auth ban/unban)
+- Role assignment with institution linking for clinicians/institution admins
+- Bulk actions: select multiple users for batch operations
+- User details view: profile, institution, last sign-in, patient count
+- Send email to individual users via Resend
+- Export all users to CSV
+
+**Institution Management**
+- CRUD operations for healthcare institutions
+- Set default institution for new registrations
+- Validation prevents deletion of institutions with assigned users
+
+**User Invites**
+- Token-based invitation system with pre-assigned roles
+- Email delivery of invite links
+- 7-day expiration with status tracking
+- Invite management (view pending, cancel)
+
+**Activity Logging**
+- Comprehensive audit trail of all admin actions
+- Tracks: user, action, target type, target ID, details, IP address, timestamp
+- Paginated log viewer with action/target filtering
+
+**Analytics Dashboard**
+- User distribution pie chart (by role)
+- User growth over time bar chart
+- Daily activity line chart
+- Summary statistics: total users, role counts, institution count
+
 ### Design Patterns
 
 **Separation of Concerns**
