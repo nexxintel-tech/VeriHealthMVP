@@ -12,9 +12,9 @@ export default function Plans() {
     {
       name: 'Basic',
       conditions: '1-2 conditions',
-      monthlyPrice: 9.99,
-      annualPrice: 95.88,
-      annualMonthly: 7.99,
+      monthlyPrice: 15000,
+      annualPrice: 144000,
+      annualMonthly: 12000,
       icon: Heart,
       color: 'from-rose-500 to-pink-500',
       features: [
@@ -28,9 +28,9 @@ export default function Plans() {
     {
       name: 'Standard',
       conditions: '3-5 conditions',
-      monthlyPrice: 19.99,
-      annualPrice: 191.88,
-      annualMonthly: 15.99,
+      monthlyPrice: 30000,
+      annualPrice: 288000,
+      annualMonthly: 24000,
       icon: Activity,
       color: 'from-medical-blue-500 to-blue-600',
       features: [
@@ -44,9 +44,9 @@ export default function Plans() {
     {
       name: 'Premium',
       conditions: 'Unlimited conditions',
-      monthlyPrice: 29.99,
-      annualPrice: 287.88,
-      annualMonthly: 23.99,
+      monthlyPrice: 45000,
+      annualPrice: 432000,
+      annualMonthly: 36000,
       icon: Sparkles,
       color: 'from-violet-500 to-purple-600',
       features: [
@@ -64,8 +64,8 @@ export default function Plans() {
     {
       name: 'Starter',
       patients: 'Up to 100 patients',
-      monthlyPrice: 299,
-      annualPrice: 2990,
+      monthlyPrice: 450000,
+      annualPrice: 4500000,
       icon: Building2,
       color: 'from-emerald-500 to-teal-500',
       features: [
@@ -80,8 +80,8 @@ export default function Plans() {
     {
       name: 'Professional',
       patients: 'Up to 500 patients',
-      monthlyPrice: 799,
-      annualPrice: 7990,
+      monthlyPrice: 1200000,
+      annualPrice: 12000000,
       icon: Zap,
       color: 'from-medical-blue-500 to-indigo-600',
       features: [
@@ -136,7 +136,7 @@ export default function Plans() {
     },
     {
       q: 'What payment methods do you accept?',
-      a: 'We accept all major credit cards (Visa, Mastercard, American Express) and ACH bank transfers for enterprise customers. All payments are processed securely through Stripe.',
+      a: 'We accept all major credit cards (Visa, Mastercard, Verve), bank transfers, and mobile payments (Paystack, Flutterwave). Enterprise customers can also pay via direct bank transfer.',
     },
   ];
 
@@ -233,14 +233,14 @@ export default function Plans() {
                     <div className="mb-4">
                       <div className="flex items-baseline gap-1">
                         <span className="text-4xl font-heading font-bold text-slate-900">
-                          ${billingPeriod === 'monthly' ? plan.monthlyPrice : plan.annualMonthly}
+                          ₦{(billingPeriod === 'monthly' ? plan.monthlyPrice : plan.annualMonthly).toLocaleString()}
                         </span>
                         <span className="text-slate-500 text-sm">/mo</span>
                       </div>
                       <p className="text-xs text-slate-500 mt-1">
                         {billingPeriod === 'annual' 
-                          ? `Billed at $${plan.annualPrice}/year`
-                          : <span className="text-emerald-600">Save ${((plan.monthlyPrice - plan.annualMonthly) * 12).toFixed(0)}/yr with annual</span>
+                          ? `Billed at ₦${plan.annualPrice.toLocaleString()}/year`
+                          : <span className="text-emerald-600">Save ₦{((plan.monthlyPrice - plan.annualMonthly) * 12).toLocaleString()}/yr with annual</span>
                         }
                       </p>
                     </div>
@@ -347,14 +347,14 @@ export default function Plans() {
                         <>
                           <div className="flex items-baseline gap-1">
                             <span className="text-4xl font-heading font-bold text-slate-900">
-                              ${billingPeriod === 'monthly' ? plan.monthlyPrice : Math.round(plan.annualPrice! / 12)}
+                              ₦{(billingPeriod === 'monthly' ? plan.monthlyPrice : Math.round(plan.annualPrice! / 12)).toLocaleString()}
                             </span>
                             <span className="text-slate-500 text-sm">/mo</span>
                           </div>
                           <p className="text-xs text-slate-500 mt-1">
                             {billingPeriod === 'annual'
-                              ? `Billed at $${plan.annualPrice?.toLocaleString()}/year`
-                              : <span className="text-emerald-600">Save ${((plan.monthlyPrice * 12) - plan.annualPrice!).toLocaleString()}/yr with annual</span>
+                              ? `Billed at ₦${plan.annualPrice?.toLocaleString()}/year`
+                              : <span className="text-emerald-600">Save ₦{((plan.monthlyPrice * 12) - plan.annualPrice!).toLocaleString()}/yr with annual</span>
                             }
                           </p>
                         </>

@@ -5,7 +5,7 @@ export default function Shop() {
     {
       id: 1,
       name: 'VeriHealth Starter Kit',
-      price: '$299',
+      price: '₦450,000',
       description: 'Complete monitoring package for individual patients',
       features: [
         'Blood pressure monitor',
@@ -18,7 +18,7 @@ export default function Shop() {
     {
       id: 2,
       name: 'VeriHealth Professional',
-      price: '$799',
+      price: '₦1,200,000',
       description: 'Advanced monitoring suite for healthcare facilities',
       features: [
         'All Starter Kit devices',
@@ -46,7 +46,7 @@ export default function Shop() {
     {
       id: 4,
       name: 'Replacement Sensors',
-      price: '$49',
+      price: '₦75,000',
       description: 'High-quality replacement sensors and accessories',
       features: [
         'Compatible with all VeriHealth devices',
@@ -59,7 +59,7 @@ export default function Shop() {
     {
       id: 5,
       name: 'Annual Monitoring License',
-      price: '$599/year',
+      price: '₦900,000/year',
       description: 'Software license for continuous patient monitoring',
       features: [
         'Unlimited patient profiles',
@@ -73,7 +73,7 @@ export default function Shop() {
     {
       id: 6,
       name: 'Training & Certification',
-      price: '$399',
+      price: '₦600,000',
       description: 'Comprehensive training program for healthcare staff',
       features: [
         '8-hour online course',
