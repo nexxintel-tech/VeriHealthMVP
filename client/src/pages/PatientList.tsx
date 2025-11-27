@@ -28,7 +28,7 @@ import { getUser } from "@/lib/auth";
 
 export default function PatientList() {
   const user = getUser();
-  const isClinicianOrAdmin = user?.role === 'clinician' || user?.role === 'admin';
+  const isClinicianOrAdmin = user?.role === 'clinician' || user?.role === 'admin' || user?.role === 'institution_admin';
   
   const { data: patients = [], isLoading } = useQuery({
     queryKey: ["patients"],

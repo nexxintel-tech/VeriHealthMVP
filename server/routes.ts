@@ -419,7 +419,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get all patients (role-based access)
   // - Patients: see only their own data
   // - Clinicians: see only patients assigned to them
-  // - Institution admins: see all patients in their institution
+  // - Institution admins: see only patients assigned to them
   // - Admins: see all patients
   app.get("/api/patients", authenticateUser, async (req, res) => {
     try {
@@ -436,12 +436,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (userRole === 'patient') {
         // Patients only see their own data
         patientsQuery = patientsQuery.eq('user_id', userId);
-      } else if (userRole === 'clinician') {
-        // Clinicians only see patients assigned to them
+      } else if (userRole === 'clinician' || userRole === 'institution_admin') {
+        // Clinicians and institution admins only see patients assigned to them
         patientsQuery = patientsQuery.eq('assigned_clinician_id', userId);
-      } else if (userRole === 'institution_admin') {
-        // Institution admins don't have access to patient data - they manage clinicians
-        return res.status(403).json({ error: "Institution admins manage clinicians, not patients" });
       }
       // Admins see all patients (no filter)
 
@@ -524,11 +521,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (userRole === 'patient' && patient.user_id !== userId) {
         return res.status(403).json({ error: "Access denied" });
       }
-      if (userRole === 'clinician' && patient.assigned_clinician_id !== userId) {
+      if ((userRole === 'clinician' || userRole === 'institution_admin') && patient.assigned_clinician_id !== userId) {
         return res.status(403).json({ error: "Access denied - patient not assigned to you" });
-      }
-      if (userRole === 'institution_admin') {
-        return res.status(403).json({ error: "Institution admins manage clinicians, not patients" });
       }
 
       // Fetch latest risk score
@@ -585,11 +579,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (userRole === 'patient' && patient?.user_id !== userId) {
         return res.status(403).json({ error: "Access denied" });
       }
-      if (userRole === 'clinician' && patient?.assigned_clinician_id !== userId) {
+      if ((userRole === 'clinician' || userRole === 'institution_admin') && patient?.assigned_clinician_id !== userId) {
         return res.status(403).json({ error: "Access denied - patient not assigned to you" });
-      }
-      if (userRole === 'institution_admin') {
-        return res.status(403).json({ error: "Institution admins manage clinicians, not patients" });
       }
 
       let query = supabase
