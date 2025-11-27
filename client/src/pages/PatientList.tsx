@@ -24,8 +24,12 @@ import {
 import { Link } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useState } from "react";
+import { getUser } from "@/lib/auth";
 
 export default function PatientList() {
+  const user = getUser();
+  const isClinicianOrAdmin = user?.role === 'clinician' || user?.role === 'admin';
+  
   const { data: patients = [], isLoading } = useQuery({
     queryKey: ["patients"],
     queryFn: fetchPatients,
