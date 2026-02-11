@@ -41,16 +41,12 @@ export type Database = {
         Row: {
           id: string;
           email: string;
-          role: 'patient' | 'clinician' | 'admin' | 'institution_admin';
-          institution_id: string | null;
           approval_status: 'pending' | 'approved' | 'rejected' | null;
           created_at: string;
         };
         Insert: {
           id?: string;
           email: string;
-          role?: 'patient' | 'clinician' | 'admin' | 'institution_admin';
-          institution_id?: string | null;
           approval_status?: 'pending' | 'approved' | 'rejected' | null;
           created_at?: string;
         };
@@ -171,6 +167,22 @@ export type Database = {
           specialty?: string | null;
           phone?: string | null;
           created_at?: string;
+        };
+      };
+      user_profiles: {
+        Row: {
+          user_id: string;
+          role: 'patient' | 'clinician' | 'admin' | 'institution_admin';
+          institution_id: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          role?: 'patient' | 'clinician' | 'admin' | 'institution_admin';
+          institution_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
         };
       };
     };

@@ -42,10 +42,19 @@ export async function authenticateUser(
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
-    // Fetch user role from users table
+    const { data: profileData, error: profileError } = await supabase
+      .from('user_profiles')
+      .select('user_id, role, institution_id')
+      .eq('user_id', user.id)
+      .single();
+
+    if (profileError || !profileData) {
+      return res.status(403).json({ error: 'User profile not found' });
+    }
+
     const { data: userData, error: userError } = await supabase
       .from('users')
-      .select('id, email, role, institution_id, approval_status')
+      .select('id, email, approval_status')
       .eq('id', user.id)
       .single();
 
@@ -53,12 +62,11 @@ export async function authenticateUser(
       return res.status(403).json({ error: 'User not found in database' });
     }
 
-    // Attach user info to request
     req.user = {
       id: userData.id,
       email: userData.email,
-      role: userData.role as 'patient' | 'clinician' | 'admin' | 'institution_admin',
-      institutionId: userData.institution_id,
+      role: profileData.role as 'patient' | 'clinician' | 'admin' | 'institution_admin',
+      institutionId: profileData.institution_id,
       approvalStatus: userData.approval_status,
     };
 

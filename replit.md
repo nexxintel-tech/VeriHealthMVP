@@ -79,10 +79,14 @@ The VeriHealth platform consists of two separate web applications:
 - Supabase Auth for user management with email/password
 - Email confirmation workflow (currently disabled pending domain verification)
 - Password reset via secure token system
-- Role-based access: patient, clinician, admin
-- JWT-based session management with secure cookies
-- Problem: Need secure, healthcare-compliant user authentication
-- Solution: Supabase Auth provides HIPAA-eligible authentication when properly configured
+- Role-based access: patient, clinician, admin, institution_admin
+- Supabase native token verification (NOT custom JWT) via `supabase.auth.getUser(token)`
+- Canonical role source: `public.user_profiles.role` (per Guardrail document)
+- The `users` table stores identity data (email, approval_status) only — NOT roles
+- `/api/session/check` endpoint returns `{ok, userId, role, institutionId}` from `user_profiles`
+- Patient role blocked from verihealth.com dashboard login (redirected to app.verihealth.com)
+- Problem: Need secure, healthcare-compliant user authentication with consistent role source across all clients
+- Solution: Supabase Auth provides HIPAA-eligible authentication; `user_profiles` ensures single role source for dashboard, Median app, BLE, and WhatsApp clients
 
 **Email Confirmation System (Disabled - Pending Domain Setup)**
 - Registration flow sends confirmation email via Resend API

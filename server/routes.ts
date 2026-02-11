@@ -1,6 +1,5 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import jwt from 'jsonwebtoken';
 import { supabase } from "./supabase";
 import { authenticateUser, requireRole, requireApproved } from "./middleware/auth";
 import { sendEmail, generateConfirmationEmail, generatePasswordResetEmail } from "./email";
@@ -33,14 +32,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      // Check clinician approval status
+      const { data: profileData } = await supabase
+        .from('user_profiles')
+        .select('role')
+        .eq('user_id', data.user.id)
+        .single();
+
       const { data: userData } = await supabase
         .from('users')
-        .select('role, approval_status')
+        .select('approval_status')
         .eq('id', data.user.id)
         .single();
 
-      if (userData?.role === 'clinician' && userData?.approval_status !== 'approved') {
+      if (profileData?.role === 'patient') {
+        if (data.session) {
+          await supabase.auth.admin.signOut(data.session.access_token);
+        }
+        return res.status(403).json({
+          error: "This portal is for clinicians and administrators only. Please use the VeriHealth app at app.verihealth.com to access your health dashboard.",
+          isPatient: true,
+        });
+      }
+
+      if (profileData?.role === 'clinician' && userData?.approval_status !== 'approved') {
         // Sign out the user
         if (data.session) {
           await supabase.auth.admin.signOut(data.session.access_token);
@@ -94,19 +108,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ error: "Failed to create user" });
       }
 
-      // Create user record in users table with patient role
       const { error: userError } = await supabase
         .from('users')
         .insert({
           id: authData.user.id,
           email: authData.user.email!,
-          role: role,
         });
 
       if (userError) {
-        // If user table insert fails, try to delete the auth user
         await supabase.auth.admin.deleteUser(authData.user.id);
         throw userError;
+      }
+
+      const { error: profileInsertError } = await supabase
+        .from('user_profiles')
+        .insert({
+          user_id: authData.user.id,
+          role: role,
+        });
+
+      if (profileInsertError) {
+        await supabase.from('users').delete().eq('id', authData.user.id);
+        await supabase.auth.admin.deleteUser(authData.user.id);
+        throw profileInsertError;
       }
 
       // If email confirmation is enabled and user needs to confirm
@@ -193,24 +217,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ error: "Failed to create user" });
       }
 
-      // Create user record in users table with clinician role and pending approval
       const { error: userError } = await supabase
         .from('users')
         .insert({
           id: authData.user.id,
           email: authData.user.email!,
-          role: 'clinician',
-          institution_id: selectedInstitutionId,
           approval_status: 'pending',
         });
 
       if (userError) {
-        // If user table insert fails, try to delete the auth user
         await supabase.auth.admin.deleteUser(authData.user.id);
         throw userError;
       }
 
-      // Create clinician profile
+      const { error: upError } = await supabase
+        .from('user_profiles')
+        .insert({
+          user_id: authData.user.id,
+          role: 'clinician',
+          institution_id: selectedInstitutionId,
+        });
+
+      if (upError) {
+        await supabase.from('users').delete().eq('id', authData.user.id);
+        await supabase.auth.admin.deleteUser(authData.user.id);
+        throw upError;
+      }
+
       const { error: profileError } = await supabase
         .from('clinician_profiles')
         .insert({
@@ -222,7 +255,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
 
       if (profileError) {
-        // Cleanup if profile creation fails
+        await supabase.from('user_profiles').delete().eq('user_id', authData.user.id);
         await supabase.from('users').delete().eq('id', authData.user.id);
         await supabase.auth.admin.deleteUser(authData.user.id);
         throw profileError;
@@ -412,6 +445,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/auth/me", authenticateUser, async (req, res) => {
     res.json({ user: req.user });
+  });
+
+  app.get("/api/session/check", authenticateUser, async (req, res) => {
+    res.json({
+      ok: true,
+      userId: req.user!.id,
+      role: req.user!.role,
+      institutionId: req.user!.institutionId || null,
+    });
   });
 
   // Protected routes - require authentication
@@ -727,14 +769,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userRole = req.user!.role;
       const userInstitutionId = req.user!.institutionId;
 
-      // Institution admins see clinician-focused stats
       if (userRole === 'institution_admin') {
-        // Get clinicians in this institution
-        const { data: clinicians } = await supabase
-          .from('users')
-          .select('id, approval_status')
+        const { data: clinicianProfiles } = await supabase
+          .from('user_profiles')
+          .select('user_id')
           .eq('role', 'clinician')
           .eq('institution_id', userInstitutionId);
+
+        const clinicianUserIds = clinicianProfiles?.map(p => p.user_id) || [];
+
+        let clinicians: any[] = [];
+        if (clinicianUserIds.length > 0) {
+          const { data } = await supabase
+            .from('users')
+            .select('id, approval_status')
+            .in('id', clinicianUserIds);
+          clinicians = data || [];
+        }
 
         const totalClinicians = clinicians?.length || 0;
         const approvedClinicians = clinicians?.filter(c => c.approval_status === 'approved').length || 0;
@@ -871,12 +922,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: "Institution admin must be assigned to an institution" });
       }
 
-      // SECURITY: Scope query to admin's institution only
+      const { data: clinicianProfiles } = await supabase
+        .from('user_profiles')
+        .select('user_id')
+        .eq('role', 'clinician')
+        .eq('institution_id', institutionId);
+
+      const clinicianIds = clinicianProfiles?.map(p => p.user_id) || [];
+
+      if (clinicianIds.length === 0) {
+        return res.json([]);
+      }
+
       const { data: users, error: usersError } = await supabase
         .from('users')
         .select('id, email, approval_status, created_at')
-        .eq('role', 'clinician')
-        .eq('institution_id', institutionId)
+        .in('id', clinicianIds)
         .in('approval_status', ['pending', 'rejected'])
         .order('created_at', { ascending: false });
 
@@ -927,28 +988,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: "Institution admin must be assigned to an institution" });
       }
 
-      // SECURITY: Atomic update with institution_id filter to prevent TOCTOU
-      // This single operation ensures we only update clinicians that:
-      // 1. Match the clinicianId
-      // 2. Have role 'clinician'
-      // 3. Belong to the admin's institution
-      const { data, error: updateError, count } = await supabase
-        .from('users')
-        .update({ approval_status: 'approved' })
-        .eq('id', clinicianId)
+      const { data: profile } = await supabase
+        .from('user_profiles')
+        .select('user_id')
+        .eq('user_id', clinicianId)
         .eq('role', 'clinician')
         .eq('institution_id', institutionId)
-        .select();
+        .single();
+
+      if (!profile) {
+        console.warn(`Admin ${req.user!.id} attempted to approve non-existent or cross-institution clinician ${clinicianId}`);
+        return res.status(404).json({ error: "Clinician not found or not in your institution" });
+      }
+
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({ approval_status: 'approved' })
+        .eq('id', clinicianId);
 
       if (updateError) {
         console.error("Error approving clinician:", updateError);
         throw updateError;
-      }
-
-      // Check if any rows were actually updated
-      if (!data || data.length === 0) {
-        console.warn(`Admin ${req.user!.id} attempted to approve non-existent or cross-institution clinician ${clinicianId}`);
-        return res.status(404).json({ error: "Clinician not found or not in your institution" });
       }
 
       res.json({ message: "Clinician approved successfully" });
@@ -972,28 +1032,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: "Institution admin must be assigned to an institution" });
       }
 
-      // SECURITY: Atomic update with institution_id filter to prevent TOCTOU
-      // This single operation ensures we only update clinicians that:
-      // 1. Match the clinicianId
-      // 2. Have role 'clinician'
-      // 3. Belong to the admin's institution
-      const { data, error: updateError } = await supabase
-        .from('users')
-        .update({ approval_status: 'rejected' })
-        .eq('id', clinicianId)
+      const { data: profile } = await supabase
+        .from('user_profiles')
+        .select('user_id')
+        .eq('user_id', clinicianId)
         .eq('role', 'clinician')
         .eq('institution_id', institutionId)
-        .select();
+        .single();
+
+      if (!profile) {
+        console.warn(`Admin ${req.user!.id} attempted to reject non-existent or cross-institution clinician ${clinicianId}`);
+        return res.status(404).json({ error: "Clinician not found or not in your institution" });
+      }
+
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({ approval_status: 'rejected' })
+        .eq('id', clinicianId);
 
       if (updateError) {
         console.error("Error rejecting clinician:", updateError);
         throw updateError;
-      }
-
-      // Check if any rows were actually updated
-      if (!data || data.length === 0) {
-        console.warn(`Admin ${req.user!.id} attempted to reject non-existent or cross-institution clinician ${clinicianId}`);
-        return res.status(404).json({ error: "Clinician not found or not in your institution" });
       }
 
       res.json({ message: "Clinician rejected" });
@@ -1012,12 +1071,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { data: users, error: usersError } = await supabase
         .from('users')
-        .select('id, email, role, institution_id, approval_status, created_at')
+        .select('id, email, approval_status, created_at')
         .order('created_at', { ascending: false });
 
       if (usersError) throw usersError;
 
-      // Get institution names
+      const { data: allProfiles } = await supabase
+        .from('user_profiles')
+        .select('user_id, role, institution_id');
+
+      const profileByUserId = allProfiles?.reduce((acc, p) => {
+        acc[p.user_id] = p;
+        return acc;
+      }, {} as Record<string, any>) || {};
+
       const { data: institutions } = await supabase
         .from('institutions')
         .select('id, name');
@@ -1027,7 +1094,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return acc;
       }, {} as Record<string, string>) || {};
 
-      // Get clinician profiles for names
       const { data: profiles } = await supabase
         .from('clinician_profiles')
         .select('user_id, full_name');
@@ -1037,16 +1103,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return acc;
       }, {} as Record<string, string>) || {};
 
-      const transformedUsers = users?.map(user => ({
-        id: user.id,
-        email: user.email,
-        name: profileMap[user.id] || user.email.split('@')[0],
-        role: user.role,
-        institutionId: user.institution_id,
-        institutionName: user.institution_id ? institutionMap[user.institution_id] : null,
-        approvalStatus: user.approval_status,
-        createdAt: user.created_at,
-      })) || [];
+      const transformedUsers = users?.map(user => {
+        const up = profileByUserId[user.id];
+        return {
+          id: user.id,
+          email: user.email,
+          name: profileMap[user.id] || user.email.split('@')[0],
+          role: up?.role || 'patient',
+          institutionId: up?.institution_id || null,
+          institutionName: up?.institution_id ? institutionMap[up.institution_id] : null,
+          approvalStatus: user.approval_status,
+          createdAt: user.created_at,
+        };
+      }) || [];
 
       res.json(transformedUsers);
     } catch (error) {
@@ -1073,42 +1142,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Invalid role" });
       }
 
-      // Build update object
-      const updateData: any = { role };
-      
-      // Institution admin and clinician require institution assignment
+      const profileUpdate: any = { role };
+      const userUpdate: any = {};
+
       if (role === 'institution_admin' || role === 'clinician') {
         if (!institutionId) {
           return res.status(400).json({ error: "Institution is required for this role" });
         }
-        updateData.institution_id = institutionId;
-        
-        // Auto-approve if becoming institution_admin
+        profileUpdate.institution_id = institutionId;
+
         if (role === 'institution_admin') {
-          updateData.approval_status = 'approved';
+          userUpdate.approval_status = 'approved';
         }
       }
 
-      // If changing to patient or admin, clear institution requirement
       if (role === 'patient' || role === 'admin') {
-        updateData.institution_id = null;
-        updateData.approval_status = null;
+        profileUpdate.institution_id = null;
+        userUpdate.approval_status = null;
       }
 
-      const { data, error: updateError } = await supabase
-        .from('users')
-        .update(updateData)
-        .eq('id', id)
+      const { data: upData, error: upError } = await supabase
+        .from('user_profiles')
+        .upsert({
+          user_id: id,
+          ...profileUpdate,
+          updated_at: new Date().toISOString(),
+        })
         .select()
         .single();
 
-      if (updateError) throw updateError;
+      if (upError) throw upError;
 
-      if (!data) {
+      if (Object.keys(userUpdate).length > 0) {
+        await supabase.from('users').update(userUpdate).eq('id', id);
+      }
+
+      if (!upData) {
         return res.status(404).json({ error: "User not found" });
       }
 
-      res.json({ message: "User role updated successfully", user: data });
+      res.json({ message: "User role updated successfully", user: upData });
     } catch (error) {
       console.error("Error updating user role:", error);
       res.status(500).json({ error: "Failed to update user role" });
@@ -1224,14 +1297,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { id } = req.params;
 
-      // Check if institution has users
-      const { data: usersInInst } = await supabase
-        .from('users')
-        .select('id')
+      const { data: profilesInInst } = await supabase
+        .from('user_profiles')
+        .select('user_id')
         .eq('institution_id', id)
         .limit(1);
 
-      if (usersInInst && usersInInst.length > 0) {
+      if (profilesInInst && profilesInInst.length > 0) {
         return res.status(400).json({ error: "Cannot delete institution with assigned users" });
       }
 
@@ -1338,24 +1410,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ip_address: req.ip,
         });
       } else if (action === 'change_role' && role) {
-        const updateData: any = { role };
+        const profileUpdate: any = { role };
+        const userUpdate: any = {};
         if (role === 'institution_admin' || role === 'clinician') {
           if (!institutionId) {
             return res.status(400).json({ error: "Institution is required for this role" });
           }
-          updateData.institution_id = institutionId;
+          profileUpdate.institution_id = institutionId;
           if (role === 'institution_admin') {
-            updateData.approval_status = 'approved';
+            userUpdate.approval_status = 'approved';
           }
         } else {
-          updateData.institution_id = null;
-          updateData.approval_status = null;
+          profileUpdate.institution_id = null;
+          userUpdate.approval_status = null;
         }
 
-        await supabase
-          .from('users')
-          .update(updateData)
-          .in('id', filteredIds);
+        for (const uid of filteredIds) {
+          await supabase
+            .from('user_profiles')
+            .upsert({
+              user_id: uid,
+              ...profileUpdate,
+              updated_at: new Date().toISOString(),
+            });
+        }
+
+        if (Object.keys(userUpdate).length > 0) {
+          await supabase.from('users').update(userUpdate).in('id', filteredIds);
+        }
 
         await supabase.from('activity_logs').insert({
           user_id: adminId,
@@ -1409,14 +1491,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get user details (admin only)
   app.get("/api/admin/users/:id", authenticateUser, requireRole('admin'), async (req, res) => {
     try {
       const { id } = req.params;
 
       const { data: user, error: userError } = await supabase
         .from('users')
-        .select('*')
+        .select('id, email, approval_status, created_at')
         .eq('id', id)
         .single();
 
@@ -1424,27 +1505,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "User not found" });
       }
 
-      // Get clinician profile if exists
+      const { data: userProfile } = await supabase
+        .from('user_profiles')
+        .select('role, institution_id')
+        .eq('user_id', id)
+        .single();
+
+      const role = userProfile?.role || 'patient';
+      const institutionId = userProfile?.institution_id || null;
+
       const { data: profile } = await supabase
         .from('clinician_profiles')
         .select('*')
         .eq('user_id', id)
         .single();
 
-      // Get institution
       let institution = null;
-      if (user.institution_id) {
+      if (institutionId) {
         const { data: inst } = await supabase
           .from('institutions')
           .select('*')
-          .eq('id', user.institution_id)
+          .eq('id', institutionId)
           .single();
         institution = inst;
       }
 
-      // Get patient count if clinician
       let patientCount = 0;
-      if (user.role === 'clinician') {
+      if (role === 'clinician') {
         const { count } = await supabase
           .from('patients')
           .select('id', { count: 'exact', head: true })
@@ -1458,6 +1545,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const authUser = authData?.user as any;
       res.json({
         ...user,
+        role,
+        institution_id: institutionId,
         profile,
         institution,
         patientCount,
@@ -1641,30 +1730,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get admin analytics (admin only)
   app.get("/api/admin/analytics", authenticateUser, requireRole('admin'), async (req, res) => {
     try {
-      // Get user counts by role
       const { data: users } = await supabase
         .from('users')
-        .select('role, created_at');
+        .select('id, created_at');
+
+      const { data: allUserProfiles } = await supabase
+        .from('user_profiles')
+        .select('user_id, role, institution_id');
+
+      const profileByUserId = allUserProfiles?.reduce((acc, p) => {
+        acc[p.user_id] = p;
+        return acc;
+      }, {} as Record<string, any>) || {};
 
       const roleCounts: Record<string, number> = {};
       const usersByMonth: Record<string, number> = {};
       
       users?.forEach(u => {
-        roleCounts[u.role] = (roleCounts[u.role] || 0) + 1;
+        const userRole = profileByUserId[u.id]?.role || 'patient';
+        roleCounts[userRole] = (roleCounts[userRole] || 0) + 1;
         const month = new Date(u.created_at).toISOString().slice(0, 7);
         usersByMonth[month] = (usersByMonth[month] || 0) + 1;
       });
 
-      // Get institution stats
       const { data: institutions, count: institutionCount } = await supabase
         .from('institutions')
         .select('id, name', { count: 'exact' });
 
-      // Get users per institution
       const usersPerInstitution: Record<string, number> = {};
-      users?.forEach(u => {
-        if ((u as any).institution_id) {
-          usersPerInstitution[(u as any).institution_id] = (usersPerInstitution[(u as any).institution_id] || 0) + 1;
+      allUserProfiles?.forEach(p => {
+        if (p.institution_id) {
+          usersPerInstitution[p.institution_id] = (usersPerInstitution[p.institution_id] || 0) + 1;
         }
       });
 
@@ -1705,12 +1801,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { data: users, error } = await supabase
         .from('users')
-        .select('id, email, role, institution_id, approval_status, created_at')
+        .select('id, email, approval_status, created_at')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
 
-      // Get institution names
+      const { data: exportProfiles } = await supabase
+        .from('user_profiles')
+        .select('user_id, role, institution_id');
+
+      const exportProfileMap = exportProfiles?.reduce((acc, p) => {
+        acc[p.user_id] = p;
+        return acc;
+      }, {} as Record<string, any>) || {};
+
       const { data: institutions } = await supabase
         .from('institutions')
         .select('id, name');
@@ -1720,7 +1824,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return acc;
       }, {} as Record<string, string>) || {};
 
-      // Get clinician profiles
       const { data: profiles } = await supabase
         .from('clinician_profiles')
         .select('user_id, full_name');
@@ -1730,18 +1833,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return acc;
       }, {} as Record<string, string>) || {};
 
-      // Create CSV
       const csvRows = [
         ['ID', 'Email', 'Name', 'Role', 'Institution', 'Status', 'Created At'].join(','),
-        ...(users || []).map(u => [
-          u.id,
-          u.email,
-          profileMap[u.id] || u.email.split('@')[0],
-          u.role,
-          u.institution_id ? institutionMap[u.institution_id] : '',
-          u.approval_status || '',
-          u.created_at,
-        ].map(v => `"${v || ''}"`).join(',')),
+        ...(users || []).map(u => {
+          const up = exportProfileMap[u.id];
+          return [
+            u.id,
+            u.email,
+            profileMap[u.id] || u.email.split('@')[0],
+            up?.role || 'patient',
+            up?.institution_id ? institutionMap[up.institution_id] : '',
+            u.approval_status || '',
+            u.created_at,
+          ].map(v => `"${v || ''}"`).join(',');
+        }),
       ];
 
       res.setHeader('Content-Type', 'text/csv');
@@ -1761,28 +1866,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userRole = req.user!.role;
       const userInstitutionId = req.user!.institutionId;
 
-      // Build query for approved clinicians
-      let cliniciansQuery = supabase
-        .from('users')
-        .select(`
-          id,
-          email,
-          institution_id,
-          created_at
-        `)
-        .eq('role', 'clinician')
-        .eq('approval_status', 'approved');
+      let tpProfileQuery = supabase
+        .from('user_profiles')
+        .select('user_id, institution_id')
+        .eq('role', 'clinician');
 
-      // Filter to same institution (except for system admin)
       if (userRole !== 'admin' && userInstitutionId) {
-        cliniciansQuery = cliniciansQuery.eq('institution_id', userInstitutionId);
+        tpProfileQuery = tpProfileQuery.eq('institution_id', userInstitutionId);
       }
 
-      const { data: clinicians, error: cliniciansError } = await cliniciansQuery;
+      const { data: tpProfiles, error: tpError } = await tpProfileQuery;
 
-      if (cliniciansError) throw cliniciansError;
+      if (tpError) throw tpError;
 
-      if (!clinicians || clinicians.length === 0) {
+      const tpUserIds = tpProfiles?.map(p => p.user_id) || [];
+
+      if (tpUserIds.length === 0) {
+        return res.json([]);
+      }
+
+      const { data: approvedClinicianUsers } = await supabase
+        .from('users')
+        .select('id, email, created_at')
+        .in('id', tpUserIds)
+        .eq('approval_status', 'approved');
+
+      const clinicians = approvedClinicianUsers || [];
+
+      if (clinicians.length === 0) {
         return res.json([]);
       }
 
