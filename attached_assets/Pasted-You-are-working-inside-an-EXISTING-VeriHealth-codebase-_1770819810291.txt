@@ -1,0 +1,150 @@
+You are working inside an EXISTING (VeriHealth) codebase. Implement a NEW FEATURE only.
+
+Feature name: Institution Join URL + WhatsApp Value-First Onboarding (VAS-aware)
+
+Context (existing stack assumptions):
+- Existing Node/TypeScript Express API already running
+- Existing Supabase project already configured and used (auth + db)
+- Existing MessageBird WhatsApp integration exists OR webhook routing exists
+- Existing env loading exists
+Your job: add feature modules, routes, DB migrations, and tests WITHOUT breaking existing behavior.
+
+Primary outcomes:
+1) Institution Join URL
+2) Channel user who registers using that URL to the institution (server-enforced membership)
+3) WhatsApp first interaction must show value + VAS from onset (institution-aware if linked, neutral if not)
+4) Pharmacies are supported as institution_type with restricted intents
+
+Deliverables:
+- Code changes ONLY (new files + minimal edits to existing files)
+- A SQL migration file to add required tables/columns/enums
+- Update to the route registry to mount the new endpoints
+- README snippet describing how to use and test the feature with curl + MessageBird sample payload
+- Keep everything production-safe and consistent with existing auth patterns
+
+Implementation details:
+
+A) Database (add via a new migration file, e.g. migrations/2026_02_11_institutions.sql)
+Create or extend these tables (IF they already exist, alter safely):
+- institutions:
+  - id uuid pk default gen_random_uuid()
+  - name text not null
+  - slug text not null unique
+  - institution_type text not null CHECK in ('hospital','clinic','pharmacy','lab','insurer','employer','ngo')
+  - join_mode text not null default 'open' CHECK in ('open','invite_only','approval_required')
+  - allowed_intents text[] not null default '{}'
+  - requires_approval boolean not null default false
+  - created_at timestamptz not null default now()
+
+- user_profiles (or equivalent existing profile table):
+  - ensure user_id references auth.users
+  - add primary_institution_id uuid null references institutions(id)
+  - add full_name text null (only if you don’t already have a name field)
+
+- institution_memberships:
+  - id uuid pk default gen_random_uuid()
+  - user_id uuid not null references auth.users(id) on delete cascade
+  - institution_id uuid not null references institutions(id) on delete cascade
+  - role text not null default 'member' (later: 'admin','clinician','pharmacist')
+  - status text not null default 'active' CHECK in ('pending','active','suspended')
+  - created_at timestamptz not null default now()
+  - UNIQUE(user_id, institution_id)
+
+- conversation_sessions (for WhatsApp state):
+  - id uuid pk default gen_random_uuid()
+  - user_id uuid not null references auth.users(id) on delete cascade
+  - channel text not null default 'whatsapp'
+  - current_state text not null default 'IDLE'
+  - context_json jsonb not null default '{}'::jsonb
+  - expires_at timestamptz not null
+  - created_at timestamptz not null default now()
+
+Optional (if EMS already exists elsewhere, don’t duplicate):
+- emergency_events minimal table or reuse existing:
+  - id uuid pk
+  - user_id uuid not null
+  - institution_id uuid null
+  - status text not null CHECK in ('IDLE','INTENT_RECEIVED','CONFIRMATION_PENDING','AUTHORIZED','DISPATCHED','RESOLVED','CANCELLED','FAILED')
+  - confirmed_at timestamptz null
+  - created_at timestamptz not null default now()
+
+B) API endpoints (add new routes under existing router):
+1) Resolve institution by slug
+- GET /api/institutions/resolve?slug=<slug>
+- Public endpoint
+- Returns: { id, name, slug, institution_type, join_mode, requires_approval, allowed_intents }
+
+2) Bind logged-in user to institution (this is the “channel” step)
+- POST /api/institutions/bind
+- Protected endpoint (Authorization: Bearer <supabase_access_token>)
+- Accepts: { slug: string }
+- Behavior:
+  - Verify slug exists
+  - Upsert institution_memberships(user_id, institution_id)
+  - status = 'pending' if join_mode='approval_required' OR requires_approval=true else 'active'
+  - If user_profiles.primary_institution_id is null, set it to this institution_id (do NOT overwrite if already set)
+  - Return: { institution_id, membership_status }
+
+Security:
+- Use existing server auth middleware / Supabase verify logic (DO NOT roll your own JWT crypto)
+- All writes must be server-side using service role client
+- Validate payloads with Zod (or the project’s existing validation approach)
+
+C) WhatsApp streamlining (MessageBird inbound handler extension)
+Goal: On FIRST WhatsApp interaction, user must see value + VAS (institution-aware if linked; institution-neutral otherwise)
+
+- Extend the existing inbound webhook handler (do not replace it):
+  - Route: POST /webhooks/messagebird/inbound (or whatever the project currently uses)
+  - On inbound:
+    1) Normalize phone to E.164
+    2) Resolve user by phone from your existing mapping/table
+       - If no user found: send a single message with signup link (PUBLIC_APP_BASE_URL) and stop
+    3) Determine institution context:
+       - primary_institution_id from user_profiles if present
+       - if none, keep institution = null
+    4) Enforce command-based interactions:
+       - HELP, STATUS, STOP
+       - EMERGENCY triggers a confirmation state (CONFIRM_EMERGENCY); require YES to proceed
+       - REFILL only if user has a linked pharmacy OR primary institution is pharmacy OR allowed_intents includes 'REFILL'
+    5) Store session state in conversation_sessions with TTL (e.g. 10 minutes for confirmations)
+
+First message rules:
+- If the user has never messaged before (no conversation_sessions history), send VALUE-FIRST onboarding:
+  - With institution:
+    “VeriHealth — via <Institution Name>… Included: reminders, refills (if applicable), follow-ups… Optional protection: EMS, monitoring… Commands: STATUS, HELP, STOP”
+  - Without institution:
+    “VeriHealth… Included: reminders, refill support, follow-ups… Optional protection: EMS, monitoring… Commands…”
+
+No PHI:
+- Never send diagnosis, lab results, or clinical notes over WhatsApp.
+
+D) Minimal integration points (edit as little as possible)
+- Add new route file(s) and mount them in the existing router
+- Add a small service module:
+  - resolveInstitutionBySlug()
+  - bindInstitutionForUser()
+- Add a small WhatsApp flow service for:
+  - getOrCreateSession()
+  - isFirstInteraction()
+  - buildFirstMessage(institution|null)
+  - handleCommands()
+
+E) Tests / verification (lightweight)
+- Add at least:
+  - unit test for bindInstitutionForUser (status active vs pending)
+  - unit test for first WhatsApp message builder (with and without institution)
+If the repo has no test framework, provide a simple node script under /scripts to verify behaviors.
+
+F) Output requirements
+- Provide a patch-like response: list files created/modified with brief notes
+- Include the SQL migration content
+- Include curl examples:
+  - resolve institution
+  - bind institution (with bearer token)
+- Include a sample MessageBird inbound payload for local testing
+
+Do NOT:
+- Create a new frontend
+- Create a new repo scaffold
+- Change existing auth flows
+- Introduce breaking changes
