@@ -38,8 +38,8 @@ export default function PatientList() {
   const [searchTerm, setSearchTerm] = useState("");
 
   const filteredPatients = patients.filter(p => 
-    p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.conditions.some(c => c.toLowerCase().includes(searchTerm.toLowerCase()))
+    (p.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (p.conditions || []).some(c => (c || '').toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
   return (
