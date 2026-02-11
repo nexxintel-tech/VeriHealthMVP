@@ -37,9 +37,20 @@ export default function PatientList() {
 
   const [searchTerm, setSearchTerm] = useState("");
 
-  const filteredPatients = patients.filter(p => 
-    (p.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (p.conditions || []).some(c => (c || '').toLowerCase().includes(searchTerm.toLowerCase()))
+  const safePatients = patients.map(p => ({
+    ...p,
+    name: p.name || 'Unknown',
+    conditions: Array.isArray(p.conditions) ? p.conditions.filter(Boolean) : [],
+    gender: p.gender || 'N/A',
+    status: p.status || 'Inactive',
+    riskScore: p.riskScore ?? 0,
+    riskLevel: p.riskLevel || 'low',
+    lastSync: p.lastSync || new Date().toISOString(),
+  }));
+
+  const filteredPatients = safePatients.filter(p => 
+    p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    p.conditions.some(c => c.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
   return (

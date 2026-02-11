@@ -483,14 +483,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Transform data to match frontend format
       const transformedPatients = patients.map(patient => ({
         id: patient.id,
-        name: patient.name,
-        age: patient.age,
-        gender: patient.gender,
+        name: patient.name || patient.full_name || 'Unknown',
+        age: patient.age || 0,
+        gender: patient.gender || 'N/A',
         conditions: conditionsByPatient[patient.id] || [],
         riskScore: latestRiskByPatient[patient.id]?.score || 0,
         riskLevel: latestRiskByPatient[patient.id]?.risk_level || "low",
         lastSync: latestRiskByPatient[patient.id]?.last_sync || patient.created_at,
-        status: patient.status,
+        status: patient.status || 'Active',
       }));
 
       res.json(transformedPatients);
