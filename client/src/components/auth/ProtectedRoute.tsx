@@ -24,7 +24,7 @@ function PatientBlockedScreen() {
         </div>
         <div className="space-y-3">
           <a
-            href="https://app.verihealth.com"
+            href="https://app.verihealths.com"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center justify-center gap-2 w-full h-11 rounded-md bg-primary text-primary-foreground text-base font-medium hover:bg-primary/90 transition-colors"

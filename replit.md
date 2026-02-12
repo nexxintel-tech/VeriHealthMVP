@@ -84,7 +84,7 @@ The VeriHealth platform consists of two separate web applications:
 - Canonical role source: `public.user_profiles.role` (per Guardrail document)
 - The `users` table stores identity data (email, approval_status) only — NOT roles
 - `/api/session/check` endpoint returns `{ok, userId, role, institutionId}` from `user_profiles`
-- Patient role blocked from verihealth.com dashboard login (redirected to app.verihealth.com)
+- Patient role blocked from verihealth.com dashboard login (redirected to app.verihealths.com)
 - Problem: Need secure, healthcare-compliant user authentication with consistent role source across all clients
 - Solution: Supabase Auth provides HIPAA-eligible authentication; `user_profiles` ensures single role source for dashboard, Median app, BLE, and WhatsApp clients
 

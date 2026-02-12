@@ -17,7 +17,7 @@ if (!DASHBOARD_URL) {
     'CRITICAL: VITE_DASHBOARD_URL is not set! Portal redirects will not work.\n' +
     'Please set VITE_DASHBOARD_URL in your .env file.\n' +
     'Example: VITE_DASHBOARD_URL=http://localhost:5000 (development)\n' +
-    'Example: VITE_DASHBOARD_URL=https://app.verihealth.com (production)'
+    'Example: VITE_DASHBOARD_URL=https://app.verihealths.com (production)'
   );
 }
 
@@ -50,7 +50,7 @@ function PortalRedirect() {
             <strong>Development:</strong> <code className="bg-gray-100 px-1 py-0.5 rounded text-xs">VITE_DASHBOARD_URL=http://localhost:5000</code>
           </p>
           <p className="text-sm text-gray-600 mt-2">
-            <strong>Production:</strong> <code className="bg-gray-100 px-1 py-0.5 rounded text-xs">VITE_DASHBOARD_URL=https://app.verihealth.com</code>
+            <strong>Production:</strong> <code className="bg-gray-100 px-1 py-0.5 rounded text-xs">VITE_DASHBOARD_URL=https://app.verihealths.com</code>
           </p>
         </div>
       </div>

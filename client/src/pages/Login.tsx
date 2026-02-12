@@ -203,13 +203,13 @@ export default function Login() {
                     Please use the VeriHealth app to access your health dashboard.
                   </p>
                   <a
-                    href="https://app.verihealth.com"
+                    href="https://app.verihealths.com"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center text-sm font-medium text-red-700 dark:text-red-300 hover:underline"
                     data-testid="link-patient-app"
                   >
-                    Go to app.verihealth.com &rarr;
+                    Go to app.verihealths.com &rarr;
                   </a>
                 </div>
               </div>

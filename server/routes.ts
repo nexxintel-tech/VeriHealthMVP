@@ -49,7 +49,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           await supabase.auth.admin.signOut(data.session.access_token);
         }
         return res.status(403).json({
-          error: "This portal is for clinicians and administrators only. Please use the VeriHealth app at app.verihealth.com to access your health dashboard.",
+          error: "This portal is for clinicians and administrators only. Please use the VeriHealth app at app.verihealths.com to access your health dashboard.",
           isPatient: true,
         });
       }
