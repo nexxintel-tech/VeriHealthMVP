@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Activity, ShieldCheck, Loader2, Mail, Eye, EyeOff } from "lucide-react";
+import { Activity, ShieldCheck, Loader2, Mail, Eye, EyeOff, AlertTriangle, Clock } from "lucide-react";
 import { login } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 
@@ -17,11 +17,15 @@ export default function Login() {
   const [showResendConfirmation, setShowResendConfirmation] = useState(false);
   const [unconfirmedEmail, setUnconfirmedEmail] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [patientBlocked, setPatientBlocked] = useState(false);
+  const [clinicianPending, setClinicianPending] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setShowResendConfirmation(false);
+    setPatientBlocked(false);
+    setClinicianPending(false);
 
     try {
       await login({ email, password });
@@ -33,9 +37,25 @@ export default function Login() {
       
       setLocation("/");
     } catch (error: any) {
-      // Check if this is an email confirmation error
-      const errorData = error.response?.data || {};
-      if (errorData.requiresConfirmation) {
+      const errorData = error.data || {};
+
+      if (errorData.isPatient) {
+        setPatientBlocked(true);
+        toast({
+          title: "Access restricted",
+          description: "Patient accounts must use the VeriHealth mobile app.",
+          variant: "destructive",
+          duration: 8000,
+        });
+      } else if (errorData.approvalStatus === 'pending') {
+        setClinicianPending(true);
+        toast({
+          title: "Account pending approval",
+          description: "Your clinician account is awaiting approval from your institution administrator.",
+          variant: "destructive",
+          duration: 8000,
+        });
+      } else if (errorData.requiresConfirmation) {
         setShowResendConfirmation(true);
         setUnconfirmedEmail(errorData.email || email);
         toast({
@@ -170,6 +190,47 @@ export default function Login() {
               )}
             </Button>
           </form>
+
+          {patientBlocked && (
+            <div className="bg-red-50 dark:bg-red-950/20 p-4 rounded-lg border border-red-200 dark:border-red-800" data-testid="alert-patient-blocked">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="h-5 w-5 text-red-600 dark:text-red-400 mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-sm font-medium text-red-900 dark:text-red-100 mb-1">
+                    This portal is for clinicians and administrators only
+                  </p>
+                  <p className="text-sm text-red-800 dark:text-red-200 mb-3">
+                    Please use the VeriHealth app to access your health dashboard.
+                  </p>
+                  <a
+                    href="https://app.verihealth.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center text-sm font-medium text-red-700 dark:text-red-300 hover:underline"
+                    data-testid="link-patient-app"
+                  >
+                    Go to app.verihealth.com &rarr;
+                  </a>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {clinicianPending && (
+            <div className="bg-amber-50 dark:bg-amber-950/20 p-4 rounded-lg border border-amber-200 dark:border-amber-800" data-testid="alert-clinician-pending">
+              <div className="flex items-start gap-3">
+                <Clock className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-sm font-medium text-amber-900 dark:text-amber-100 mb-1">
+                    Account pending approval
+                  </p>
+                  <p className="text-sm text-amber-800 dark:text-amber-200">
+                    Your clinician account is awaiting approval from your institution administrator. You'll be able to log in once approved.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {showResendConfirmation && (
             <div className="bg-amber-50 dark:bg-amber-950/20 p-4 rounded-lg border border-amber-200 dark:border-amber-800">
