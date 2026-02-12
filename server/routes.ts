@@ -459,27 +459,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Protected routes - require authentication
   
   // Get all patients (role-based access)
-  // - Patients: see only their own data
   // - Clinicians: see only patients assigned to them
   // - Institution admins: see only patients assigned to them
   // - Admins: see all patients
-  app.get("/api/patients", authenticateUser, async (req, res) => {
+  app.get("/api/patients", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), async (req, res) => {
     try {
       const userId = req.user!.id;
       const userRole = req.user!.role;
       const userInstitutionId = req.user!.institutionId;
 
-      // Fetch patients based on role with proper query chaining
       let patientsQuery = supabase
         .from("patients")
         .select("*");
 
-      // Role-based filtering
-      if (userRole === 'patient') {
-        // Patients only see their own data
-        patientsQuery = patientsQuery.eq('user_id', userId);
-      } else if (userRole === 'clinician' || userRole === 'institution_admin') {
-        // Clinicians and institution admins only see patients assigned to them
+      if (userRole === 'clinician' || userRole === 'institution_admin') {
         patientsQuery = patientsQuery.eq('assigned_clinician_id', userId);
       }
       // Admins see all patients (no filter)
@@ -543,7 +536,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get single patient with full details
-  app.get("/api/patients/:id", authenticateUser, async (req, res) => {
+  app.get("/api/patients/:id", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), async (req, res) => {
     try {
       const { id } = req.params;
       const userId = req.user!.id;
@@ -559,10 +552,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (patientError) throw patientError;
 
-      // Role-based access control
-      if (userRole === 'patient' && patient.user_id !== userId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
       if ((userRole === 'clinician' || userRole === 'institution_admin') && patient.assigned_clinician_id !== userId) {
         return res.status(403).json({ error: "Access denied - patient not assigned to you" });
       }
@@ -603,7 +592,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get vital readings for a patient
-  app.get("/api/patients/:id/vitals", authenticateUser, async (req, res) => {
+  app.get("/api/patients/:id/vitals", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), async (req, res) => {
     try {
       const { id } = req.params;
       const { type, days = 7 } = req.query;
@@ -618,9 +607,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .eq("id", id)
         .single();
 
-      if (userRole === 'patient' && patient?.user_id !== userId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
       if ((userRole === 'clinician' || userRole === 'institution_admin') && patient?.assigned_clinician_id !== userId) {
         return res.status(403).json({ error: "Access denied - patient not assigned to you" });
       }
@@ -1860,7 +1846,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Get top performing clinicians (for dashboard widget)
   // Shows top performers within the user's institution only
-  app.get("/api/clinicians/top-performers", authenticateUser, async (req, res) => {
+  app.get("/api/clinicians/top-performers", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), async (req, res) => {
     try {
       const userId = req.user!.id;
       const userRole = req.user!.role;
