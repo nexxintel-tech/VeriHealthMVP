@@ -122,10 +122,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { error: profileInsertError } = await supabase
         .from('user_profiles')
-        .insert({
+        .upsert({
           user_id: authData.user.id,
           role: role,
-        });
+        }, { onConflict: 'user_id' });
 
       if (profileInsertError) {
         await supabase.from('users').delete().eq('id', authData.user.id);
@@ -232,11 +232,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { error: upError } = await supabase
         .from('user_profiles')
-        .insert({
+        .upsert({
           user_id: authData.user.id,
           role: 'clinician',
           institution_id: selectedInstitutionId,
-        });
+        }, { onConflict: 'user_id' });
 
       if (upError) {
         await supabase.from('users').delete().eq('id', authData.user.id);
