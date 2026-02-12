@@ -6,6 +6,7 @@ import {
   HeartPulse, 
   ArrowUpRight,
   UserCheck,
+  UserPlus,
   Clock,
   Award
 } from "lucide-react";
@@ -13,6 +14,7 @@ import Layout from "@/components/layout/Layout";
 import { StatCard } from "@/components/dashboard/StatCard";
 import { RiskBadge } from "@/components/dashboard/RiskBadge";
 import { TopPerformingClinicians } from "@/components/dashboard/TopPerformingClinicians";
+import { UnassignedPatients } from "@/components/dashboard/UnassignedPatients";
 import { PatientDashboard } from "@/components/dashboard/PatientDashboard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fetchPatients, fetchAlerts, fetchDashboardStats } from "@/lib/api";
@@ -157,11 +159,12 @@ export default function Dashboard() {
                   className="border-l-4 border-l-warning"
                 />
                 <StatCard 
-                  title="Avg. Risk Score" 
-                  value={stats?.avgRiskScore || 0} 
-                  icon={HeartPulse} 
-                  trend="Stable" 
-                  trendDirection="neutral"
+                  title="Awaiting Clinician" 
+                  value={stats?.unassignedPatients || 0} 
+                  icon={UserPlus} 
+                  trend="Patients to claim" 
+                  trendDirection={(stats?.unassignedPatients ?? 0) > 0 ? "down" : "neutral"}
+                  className={(stats?.unassignedPatients ?? 0) > 0 ? "border-l-4 border-l-primary" : ""}
                 />
               </>
             )}
@@ -261,7 +264,10 @@ export default function Dashboard() {
         </div>
         )}
 
-        {/* Top Performing Clinicians - For clinicians, admins, and institution admins */}
+        {isClinicianOrAdmin && (
+          <UnassignedPatients />
+        )}
+
         {(isClinicianOrAdmin || isInstitutionAdmin) && (
           <div className="grid gap-4 md:grid-cols-1">
             <TopPerformingClinicians />

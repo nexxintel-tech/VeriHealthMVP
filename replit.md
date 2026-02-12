@@ -88,6 +88,15 @@ The VeriHealth platform consists of two separate web applications:
 - Problem: Need secure, healthcare-compliant user authentication with consistent role source across all clients
 - Solution: Supabase Auth provides HIPAA-eligible authentication; `user_profiles` ensures single role source for dashboard, Median app, BLE, and WhatsApp clients
 
+**Patient-Clinician Matching System**
+- Patients who register without an invite link are auto-assigned to the default institution with `assigned_clinician_id = null`
+- Registration accepts optional `fullName`, `age`, `gender`, `institutionCode` fields
+- Patients who register without profile info can complete it later via `POST /api/patient/complete-profile`
+- `GET /api/patients/unassigned` returns patients awaiting clinician assignment (institution-scoped)
+- `POST /api/patients/:id/claim` allows clinicians to claim unassigned patients (atomic, race-condition-safe)
+- Dashboard shows "Patients Awaiting Clinician" widget and "Awaiting Clinician" stat card
+- Institution boundary enforced: clinicians can only see/claim patients within their institution
+
 **Email Confirmation System (Disabled - Pending Domain Setup)**
 - Registration flow sends confirmation email via Resend API
 - Login blocks unconfirmed users with option to resend confirmation email

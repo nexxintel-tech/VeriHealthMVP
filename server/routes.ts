@@ -82,21 +82,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/auth/register", async (req, res) => {
     try {
-      const { email, password } = req.body;
+      const { email, password, fullName, age, gender, institutionCode } = req.body;
 
-      // Validate inputs
       if (!email || !password) {
         return res.status(400).json({ error: "Email and password are required" });
       }
 
-      // SECURITY: Always default to 'patient' role
-      // Clinician/admin roles must be assigned by administrators
       const role = 'patient';
 
-      // Check if email confirmation is enabled in environment
+      let targetInstitutionId: string | null = null;
+
+      if (institutionCode) {
+        const { data: inst } = await supabase
+          .from('institutions')
+          .select('id, name')
+          .eq('id', institutionCode)
+          .single();
+
+        if (!inst) {
+          return res.status(400).json({ error: "Invalid institution code. Please check and try again." });
+        }
+        targetInstitutionId = inst.id;
+      } else {
+        const { data: defaultInst } = await supabase
+          .from('institutions')
+          .select('id')
+          .eq('is_default', true)
+          .single();
+
+        if (defaultInst) {
+          targetInstitutionId = defaultInst.id;
+        }
+      }
+
       const emailConfirmationEnabled = process.env.ENABLE_EMAIL_CONFIRMATION === 'true';
 
-      // Create user in Supabase Auth
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email,
         password,
@@ -125,6 +145,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .upsert({
           user_id: authData.user.id,
           role: role,
+          institution_id: targetInstitutionId,
         }, { onConflict: 'user_id' });
 
       if (profileInsertError) {
@@ -133,9 +154,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         throw profileInsertError;
       }
 
-      // If email confirmation is enabled and user needs to confirm
+      if (fullName && age && gender) {
+        const { error: patientError } = await supabase
+          .from('patients')
+          .insert({
+            user_id: authData.user.id,
+            name: fullName,
+            age: parseInt(age, 10),
+            gender,
+            institution_id: targetInstitutionId,
+            assigned_clinician_id: null,
+            status: 'Active',
+          });
+
+        if (patientError) {
+          console.error("Error creating patient record:", patientError);
+        }
+      }
+
       if (emailConfirmationEnabled && !authData.session) {
-        // Generate confirmation link using Supabase
         const redirectTo = `${process.env.VITE_DASHBOARD_URL || 'http://localhost:5000'}/confirm-email`;
         const { data: linkData, error: linkError } = await supabase.auth.admin.generateLink({
           type: 'signup',
@@ -149,13 +186,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (linkError) {
           console.error("Error generating confirmation link:", linkError);
         } else {
-          // Send confirmation email via Resend
           try {
             const confirmationEmail = generateConfirmationEmail(email, linkData.properties.action_link);
             await sendEmail(confirmationEmail);
           } catch (emailError: any) {
             console.error("Error sending confirmation email:", emailError);
-            // Don't fail registration if email fails, user can request resend
           }
         }
 
@@ -165,7 +200,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      // Email confirmation disabled - return session
       res.json({
         user: authData.user,
         session: authData.session,
@@ -174,6 +208,177 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Registration error:", error);
       res.status(400).json({ error: error.message || "Registration failed" });
+    }
+  });
+
+  app.post("/api/patient/complete-profile", authenticateUser, async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      const userRole = req.user!.role;
+
+      if (userRole !== 'patient') {
+        return res.status(403).json({ error: "Only patients can complete this profile" });
+      }
+
+      const { fullName, age, gender, institutionCode } = req.body;
+
+      if (!fullName || !age || !gender) {
+        return res.status(400).json({ error: "Full name, age, and gender are required" });
+      }
+
+      const { data: existingPatient } = await supabase
+        .from('patients')
+        .select('id')
+        .eq('user_id', userId)
+        .single();
+
+      if (existingPatient) {
+        return res.status(400).json({ error: "Patient profile already exists" });
+      }
+
+      let targetInstitutionId: string | null = null;
+
+      if (institutionCode) {
+        const { data: inst } = await supabase
+          .from('institutions')
+          .select('id')
+          .eq('id', institutionCode)
+          .single();
+
+        if (!inst) {
+          return res.status(400).json({ error: "Invalid institution code" });
+        }
+        targetInstitutionId = inst.id;
+      } else {
+        const { data: defaultInst } = await supabase
+          .from('institutions')
+          .select('id')
+          .eq('is_default', true)
+          .single();
+
+        if (defaultInst) {
+          targetInstitutionId = defaultInst.id;
+        }
+      }
+
+      const { data: patient, error: patientError } = await supabase
+        .from('patients')
+        .insert({
+          user_id: userId,
+          name: fullName,
+          age: parseInt(age, 10),
+          gender,
+          institution_id: targetInstitutionId,
+          assigned_clinician_id: null,
+          status: 'Active',
+        })
+        .select()
+        .single();
+
+      if (patientError) throw patientError;
+
+      if (targetInstitutionId) {
+        await supabase
+          .from('user_profiles')
+          .update({ institution_id: targetInstitutionId })
+          .eq('user_id', userId);
+      }
+
+      res.json({ patient, message: "Profile completed successfully" });
+    } catch (error: any) {
+      console.error("Complete profile error:", error);
+      res.status(400).json({ error: error.message || "Failed to complete profile" });
+    }
+  });
+
+  app.get("/api/patients/unassigned", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      const userRole = req.user!.role;
+      const userInstitutionId = req.user!.institutionId;
+
+      let query = supabase
+        .from('patients')
+        .select('id, user_id, name, age, gender, status, institution_id, created_at')
+        .is('assigned_clinician_id', null)
+        .eq('status', 'Active')
+        .order('created_at', { ascending: true });
+
+      if (userRole === 'clinician' || userRole === 'institution_admin') {
+        if (userInstitutionId) {
+          query = query.eq('institution_id', userInstitutionId);
+        } else {
+          return res.json([]);
+        }
+      }
+
+      const { data: patients, error } = await query;
+
+      if (error) throw error;
+
+      const patientsWithInstitution = await Promise.all(
+        (patients || []).map(async (patient: any) => {
+          let institutionName = null;
+          if (patient.institution_id) {
+            const { data: inst } = await supabase
+              .from('institutions')
+              .select('name')
+              .eq('id', patient.institution_id)
+              .single();
+            institutionName = inst?.name || null;
+          }
+          return { ...patient, institutionName };
+        })
+      );
+
+      res.json(patientsWithInstitution);
+    } catch (error: any) {
+      console.error("Error fetching unassigned patients:", error);
+      res.status(500).json({ error: "Failed to fetch unassigned patients" });
+    }
+  });
+
+  app.post("/api/patients/:id/claim", authenticateUser, requireRole('clinician'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const clinicianId = req.user!.id;
+      const clinicianInstitutionId = req.user!.institutionId;
+
+      const { data: patient, error: fetchError } = await supabase
+        .from('patients')
+        .select('id, assigned_clinician_id, institution_id, name')
+        .eq('id', id)
+        .single();
+
+      if (fetchError || !patient) {
+        return res.status(404).json({ error: "Patient not found" });
+      }
+
+      if (patient.assigned_clinician_id) {
+        return res.status(400).json({ error: "This patient is already assigned to a clinician" });
+      }
+
+      if (clinicianInstitutionId && patient.institution_id && patient.institution_id !== clinicianInstitutionId) {
+        return res.status(403).json({ error: "You can only claim patients within your institution" });
+      }
+
+      const { data: updatedRows, error: updateError } = await supabase
+        .from('patients')
+        .update({ assigned_clinician_id: clinicianId })
+        .eq('id', id)
+        .is('assigned_clinician_id', null)
+        .select('id');
+
+      if (updateError) throw updateError;
+
+      if (!updatedRows || updatedRows.length === 0) {
+        return res.status(400).json({ error: "This patient was just claimed by another clinician" });
+      }
+
+      res.json({ message: `Patient ${patient.name} has been assigned to you`, patientId: id });
+    } catch (error: any) {
+      console.error("Error claiming patient:", error);
+      res.status(500).json({ error: "Failed to claim patient" });
     }
   });
 
@@ -810,19 +1015,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      // Clinicians and admins see patient-focused stats
       let patientsQuery = supabase.from("patients").select("id");
       
       if (userRole === 'clinician') {
         patientsQuery = patientsQuery.eq('assigned_clinician_id', userId);
       }
-      // Admin sees all patients
 
       const { data: patients } = await patientsQuery;
       const patientIds = patients?.map(p => p.id) || [];
-
-      // Get total patients count
       const totalPatients = patientIds.length;
+
+      let unassignedQuery = supabase
+        .from('patients')
+        .select('id', { count: 'exact', head: true })
+        .is('assigned_clinician_id', null)
+        .eq('status', 'Active');
+
+      if (userRole === 'clinician' && userInstitutionId) {
+        unassignedQuery = unassignedQuery.eq('institution_id', userInstitutionId);
+      }
+
+      const { count: unassignedCount } = await unassignedQuery;
 
       if (totalPatients === 0) {
         return res.json({
@@ -830,6 +1043,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           highRiskCount: 0,
           activeAlerts: 0,
           avgRiskScore: 0,
+          unassignedPatients: unassignedCount || 0,
           isClinicianView: false,
         });
       }
@@ -873,6 +1087,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         highRiskCount,
         activeAlerts: activeAlerts || 0,
         avgRiskScore,
+        unassignedPatients: unassignedCount || 0,
         isClinicianView: false,
       });
     } catch (error) {

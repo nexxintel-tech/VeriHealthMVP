@@ -36,17 +36,15 @@ export interface Alert {
 }
 
 export interface DashboardStats {
-  // Patient-focused stats (for clinicians/admins)
   totalPatients?: number;
   highRiskCount?: number;
   activeAlerts?: number;
   avgRiskScore?: number;
-  // Clinician-focused stats (for institution admins)
+  unassignedPatients?: number;
   totalClinicians?: number;
   approvedClinicians?: number;
   pendingApprovals?: number;
   avgPerformanceScore?: number;
-  // Flag to indicate which view type
   isClinicianView?: boolean;
 }
 
@@ -372,6 +370,68 @@ export async function rejectClinician(clinicianId: string): Promise<void> {
     const error = await response.json();
     throw new Error(error.error || "Failed to reject clinician");
   }
+}
+
+// Unassigned patients
+export interface UnassignedPatient {
+  id: string;
+  user_id: string | null;
+  name: string;
+  age: number;
+  gender: string;
+  status: string;
+  institution_id: string | null;
+  created_at: string;
+  institutionName: string | null;
+}
+
+export async function fetchUnassignedPatients(): Promise<UnassignedPatient[]> {
+  const response = await fetch("/api/patients/unassigned", {
+    headers: getAuthHeaders(),
+  });
+  
+  if (response.status === 401) {
+    throw new Error("Unauthorized - please log in again");
+  }
+  
+  if (response.status === 403) {
+    throw new Error("Access denied");
+  }
+  
+  if (!response.ok) {
+    throw new Error("Failed to fetch unassigned patients");
+  }
+  
+  return response.json();
+}
+
+export async function claimPatient(patientId: string): Promise<{ message: string; patientId: string }> {
+  const response = await fetch(`/api/patients/${patientId}/claim`, {
+    method: "POST",
+    headers: {
+      ...getAuthHeaders(),
+      "Content-Type": "application/json",
+    },
+  });
+  
+  if (response.status === 401) {
+    throw new Error("Unauthorized - please log in again");
+  }
+  
+  if (response.status === 403) {
+    throw new Error("Access denied - you can only claim patients within your institution");
+  }
+  
+  if (response.status === 400) {
+    const error = await response.json();
+    throw new Error(error.error || "Patient is already assigned");
+  }
+  
+  if (!response.ok) {
+    throw new Error("Failed to claim patient");
+  }
+  
+  return response.json();
 }
 
 // Top performing clinicians
