@@ -53,17 +53,17 @@ function Router() {
         </ProtectedRoute>
       </Route>
       <Route path="/admin/clinician-approvals">
-        <ProtectedRoute>
+        <ProtectedRoute allowedRoles={['admin', 'institution_admin']}>
           <ClinicianApprovals />
         </ProtectedRoute>
       </Route>
       <Route path="/admin/users">
-        <ProtectedRoute>
+        <ProtectedRoute allowedRoles={['admin']}>
           <AdminPanel />
         </ProtectedRoute>
       </Route>
       <Route path="/admin">
-        <ProtectedRoute>
+        <ProtectedRoute allowedRoles={['admin']}>
           <AdminPanel />
         </ProtectedRoute>
       </Route>

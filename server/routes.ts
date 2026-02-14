@@ -5,10 +5,42 @@ import { supabase } from "./supabase";
 import { authenticateUser, requireRole, requireApproved } from "./middleware/auth";
 import { sendEmail, generateConfirmationEmail, generatePasswordResetEmail } from "./email";
 
+const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
+
+function rateLimit(windowMs: number, maxRequests: number) {
+  return (req: any, res: any, next: any) => {
+    const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+    const key = `${ip}:${req.path}`;
+    const now = Date.now();
+    const entry = rateLimitStore.get(key);
+
+    if (!entry || now > entry.resetAt) {
+      rateLimitStore.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+
+    if (entry.count >= maxRequests) {
+      return res.status(429).json({ error: "Too many requests. Please try again later." });
+    }
+
+    entry.count++;
+    next();
+  };
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of rateLimitStore) {
+    if (now > entry.resetAt) rateLimitStore.delete(key);
+  }
+}, 60000);
+
 export async function registerRoutes(app: Express): Promise<Server> {
   
+  const authRateLimit = rateLimit(15 * 60 * 1000, 10);
+
   // Auth endpoints (no authentication required)
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", authRateLimit, async (req, res) => {
     try {
       const { email, password } = req.body;
 
@@ -81,7 +113,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/auth/register", async (req, res) => {
+  app.post("/api/auth/register", authRateLimit, async (req, res) => {
     try {
       const { email, password, fullName, age, gender, institutionCode, inviteToken } = req.body;
 
@@ -458,7 +490,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Clinician registration endpoint
-  app.post("/api/auth/register-clinician", async (req, res) => {
+  app.post("/api/auth/register-clinician", authRateLimit, async (req, res) => {
     try {
       const { email, password, fullName, licenseNumber, specialty, phone, institutionId } = req.body;
 
@@ -595,7 +627,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/auth/resend-confirmation", async (req, res) => {
+  app.post("/api/auth/resend-confirmation", authRateLimit, async (req, res) => {
     try {
       const { email } = req.body;
 
@@ -641,7 +673,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/auth/forgot-password", async (req, res) => {
+  app.post("/api/auth/forgot-password", authRateLimit, async (req, res) => {
     try {
       const { email } = req.body;
 
@@ -681,7 +713,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/auth/reset-password", async (req, res) => {
+  app.post("/api/auth/reset-password", authRateLimit, async (req, res) => {
     try {
       const { password, access_token } = req.body;
 

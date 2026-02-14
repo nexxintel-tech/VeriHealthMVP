@@ -90,8 +90,7 @@ export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) 
           }
 
           if (allowedRoles && !allowedRoles.includes(data.role)) {
-            clearAuth();
-            setLocation("/login");
+            setLocation("/");
             return;
           }
 
