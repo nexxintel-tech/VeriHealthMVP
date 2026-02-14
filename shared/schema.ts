@@ -105,6 +105,31 @@ export const activityLogs = pgTable("activity_logs", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Sponsor-dependent relationships table
+export const sponsorDependents = pgTable("sponsor_dependents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sponsorUserId: varchar("sponsor_user_id").references(() => users.id).notNull(),
+  dependentPatientId: varchar("dependent_patient_id").references(() => patients.id).notNull(),
+  status: text("status").notNull().default("pending"),
+  relationship: text("relationship"),
+  createdAt: timestamp("created_at").defaultNow(),
+  approvedAt: timestamp("approved_at"),
+});
+
+// File attachments table
+export const fileAttachments = pgTable("file_attachments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  patientId: varchar("patient_id").references(() => patients.id).notNull(),
+  uploadedByUserId: varchar("uploaded_by_user_id").references(() => users.id).notNull(),
+  fileName: text("file_name").notNull(),
+  fileType: text("file_type").notNull(),
+  fileSize: integer("file_size").notNull(),
+  category: text("category").notNull().default("general"),
+  description: text("description"),
+  fileData: text("file_data").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // User invites table
 export const userInvites = pgTable("user_invites", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -154,6 +179,16 @@ export const insertUserInviteSchema = createInsertSchema(userInvites).omit({
   createdAt: true,
 });
 
+export const insertSponsorDependentSchema = createInsertSchema(sponsorDependents).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertFileAttachmentSchema = createInsertSchema(fileAttachments).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types
 export type User = typeof users.$inferSelect;
 export type Patient = typeof patients.$inferSelect;
@@ -173,3 +208,7 @@ export type ActivityLog = typeof activityLogs.$inferSelect;
 export type UserInvite = typeof userInvites.$inferSelect;
 export type InsertActivityLog = z.infer<typeof insertActivityLogSchema>;
 export type InsertUserInvite = z.infer<typeof insertUserInviteSchema>;
+export type SponsorDependent = typeof sponsorDependents.$inferSelect;
+export type InsertSponsorDependent = z.infer<typeof insertSponsorDependentSchema>;
+export type FileAttachment = typeof fileAttachments.$inferSelect;
+export type InsertFileAttachment = z.infer<typeof insertFileAttachmentSchema>;

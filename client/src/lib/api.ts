@@ -843,6 +843,220 @@ export async function fetchAdminAnalytics(): Promise<AdminAnalytics> {
   return response.json();
 }
 
+// ============================================================
+// PATIENT DASHBOARD API
+// ============================================================
+
+export interface PatientProfile {
+  patient: {
+    id: string;
+    name: string;
+    age: number;
+    gender: string;
+    status: string;
+    conditions: string[];
+    riskScore: number;
+    riskLevel: "low" | "medium" | "high";
+    lastSync: string;
+  };
+  clinician: {
+    id: string;
+    email: string;
+    name: string;
+    specialty: string;
+    phone: string | null;
+  } | null;
+  institution: {
+    id: string;
+    name: string;
+    address: string | null;
+    contactEmail: string | null;
+    contactPhone: string | null;
+  } | null;
+}
+
+export async function fetchPatientProfile(): Promise<PatientProfile> {
+  const response = await fetch("/api/patient/my-profile", {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) throw new Error("Failed to fetch profile");
+  return response.json();
+}
+
+export async function updatePatientProfile(data: { name?: string; age?: number; gender?: string }): Promise<any> {
+  const response = await fetch("/api/patient/my-profile", {
+    method: "PATCH",
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error || "Failed to update profile");
+  }
+  return response.json();
+}
+
+export async function fetchPatientVitalsOwn(type?: string, days: number = 30): Promise<PatientVital[]> {
+  const params = new URLSearchParams({ days: days.toString() });
+  if (type) params.append("type", type);
+  const response = await fetch(`/api/patient/my-vitals?${params}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) throw new Error("Failed to fetch vitals");
+  return response.json();
+}
+
+export interface PatientAlert {
+  id: string;
+  type: string;
+  message: string;
+  severity: string;
+  isRead: boolean;
+  timestamp: string;
+}
+
+export async function fetchPatientAlerts(): Promise<PatientAlert[]> {
+  const response = await fetch("/api/patient/my-alerts", {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) throw new Error("Failed to fetch alerts");
+  return response.json();
+}
+
+export interface FileAttachmentMeta {
+  id: string;
+  patientId: string;
+  uploadedByUserId: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  category: string;
+  description: string | null;
+  createdAt: string;
+}
+
+export async function fetchPatientFiles(patientId?: string): Promise<FileAttachmentMeta[]> {
+  const params = patientId ? `?patientId=${patientId}` : "";
+  const response = await fetch(`/api/patient/files${params}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) throw new Error("Failed to fetch files");
+  return response.json();
+}
+
+export async function uploadPatientFile(data: {
+  patientId: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  category: string;
+  description?: string;
+  fileData: string;
+}): Promise<FileAttachmentMeta> {
+  const response = await fetch("/api/patient/files", {
+    method: "POST",
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error || "Failed to upload file");
+  }
+  return response.json();
+}
+
+export async function downloadPatientFile(fileId: string): Promise<{ fileData: string; fileName: string; fileType: string }> {
+  const response = await fetch(`/api/patient/files/${fileId}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) throw new Error("Failed to download file");
+  return response.json();
+}
+
+export async function deletePatientFile(fileId: string): Promise<void> {
+  const response = await fetch(`/api/patient/files/${fileId}`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) throw new Error("Failed to delete file");
+}
+
+export interface DependentInfo {
+  id: string;
+  sponsorUserId: string;
+  dependentPatientId: string;
+  status: string;
+  relationship: string | null;
+  createdAt: string;
+  approvedAt: string | null;
+  patient?: {
+    id: string;
+    name: string;
+    age: number;
+    gender: string;
+    status: string;
+  };
+}
+
+export async function fetchDependents(): Promise<DependentInfo[]> {
+  const response = await fetch("/api/patient/dependents", {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) throw new Error("Failed to fetch dependents");
+  return response.json();
+}
+
+export async function requestDependentAccess(dependentEmail: string, relationship: string): Promise<any> {
+  const response = await fetch("/api/patient/dependents/request", {
+    method: "POST",
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ dependentEmail, relationship }),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error || "Failed to request access");
+  }
+  return response.json();
+}
+
+export interface SponsorRequest {
+  id: string;
+  sponsorUserId: string;
+  status: string;
+  relationship: string | null;
+  createdAt: string;
+  sponsor?: { email: string };
+}
+
+export async function fetchSponsorRequests(): Promise<SponsorRequest[]> {
+  const response = await fetch("/api/patient/sponsor-requests", {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) throw new Error("Failed to fetch sponsor requests");
+  return response.json();
+}
+
+export async function respondToSponsorRequest(requestId: string, action: 'approve' | 'reject'): Promise<any> {
+  const response = await fetch(`/api/patient/sponsor-requests/${requestId}`, {
+    method: "PATCH",
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ action }),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error || "Failed to respond to request");
+  }
+  return response.json();
+}
+
+export async function fetchDependentDashboard(patientId: string): Promise<PatientDashboardData> {
+  const response = await fetch(`/api/patient/dependent/${patientId}/dashboard`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) throw new Error("Failed to fetch dependent dashboard");
+  return response.json();
+}
+
 // Export users to CSV
 export async function exportUsersCSV(): Promise<Blob> {
   const response = await fetch("/api/admin/users/export", {

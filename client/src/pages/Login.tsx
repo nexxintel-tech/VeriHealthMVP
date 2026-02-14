@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Activity, ShieldCheck, Loader2, Mail, Eye, EyeOff, AlertTriangle, Clock } from "lucide-react";
+import { Activity, ShieldCheck, Loader2, Mail, Eye, EyeOff, Clock } from "lucide-react";
 import { login } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
@@ -18,7 +18,6 @@ export default function Login() {
   const [showResendConfirmation, setShowResendConfirmation] = useState(false);
   const [unconfirmedEmail, setUnconfirmedEmail] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [patientBlocked, setPatientBlocked] = useState(false);
   const [clinicianPending, setClinicianPending] = useState(false);
   const [socialLoading, setSocialLoading] = useState<string | null>(null);
 
@@ -55,30 +54,25 @@ export default function Login() {
     e.preventDefault();
     setIsLoading(true);
     setShowResendConfirmation(false);
-    setPatientBlocked(false);
     setClinicianPending(false);
 
     try {
-      await login({ email, password });
+      const session = await login({ email, password });
       
       toast({
         title: "Login successful",
         description: "Welcome to VeriHealth",
       });
       
-      setLocation("/");
+      if (session.user.role === 'patient') {
+        setLocation("/patient");
+      } else {
+        setLocation("/");
+      }
     } catch (error: any) {
       const errorData = error.data || {};
 
-      if (errorData.isPatient) {
-        setPatientBlocked(true);
-        toast({
-          title: "Access restricted",
-          description: "Patient accounts must use the VeriHealth mobile app.",
-          variant: "destructive",
-          duration: 8000,
-        });
-      } else if (errorData.approvalStatus === 'pending') {
+      if (errorData.approvalStatus === 'pending') {
         setClinicianPending(true);
         toast({
           title: "Account pending approval",
@@ -281,31 +275,6 @@ export default function Login() {
               )}
             </Button>
           </div>
-
-          {patientBlocked && (
-            <div className="bg-red-50 dark:bg-red-950/20 p-4 rounded-lg border border-red-200 dark:border-red-800" data-testid="alert-patient-blocked">
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="h-5 w-5 text-red-600 dark:text-red-400 mt-0.5 shrink-0" />
-                <div>
-                  <p className="text-sm font-medium text-red-900 dark:text-red-100 mb-1">
-                    This portal is for clinicians and administrators only
-                  </p>
-                  <p className="text-sm text-red-800 dark:text-red-200 mb-3">
-                    Please use the VeriHealth app to access your health dashboard.
-                  </p>
-                  <a
-                    href="https://app.verihealths.com"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center text-sm font-medium text-red-700 dark:text-red-300 hover:underline"
-                    data-testid="link-patient-app"
-                  >
-                    Go to app.verihealths.com &rarr;
-                  </a>
-                </div>
-              </div>
-            </div>
-          )}
 
           {clinicianPending && (
             <div className="bg-amber-50 dark:bg-amber-950/20 p-4 rounded-lg border border-amber-200 dark:border-amber-800" data-testid="alert-clinician-pending">

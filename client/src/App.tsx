@@ -20,6 +20,12 @@ import { ClinicianRegister } from "@/pages/ClinicianRegister";
 import { ClinicianApprovals } from "@/pages/ClinicianApprovals";
 import { AdminPanel } from "@/pages/AdminPanel";
 import AuthCallback from "@/pages/AuthCallback";
+import PatientHome from "@/pages/patient/PatientHome";
+import PatientVitals from "@/pages/patient/PatientVitals";
+import PatientAlerts from "@/pages/patient/PatientAlerts";
+import PatientProfile from "@/pages/patient/PatientProfile";
+import PatientFiles from "@/pages/patient/PatientFiles";
+import PatientDependents from "@/pages/patient/PatientDependents";
 
 function Router() {
   // Enable realtime updates
@@ -67,6 +73,36 @@ function Router() {
       <Route path="/admin">
         <ProtectedRoute allowedRoles={['admin']}>
           <AdminPanel />
+        </ProtectedRoute>
+      </Route>
+      <Route path="/patient">
+        <ProtectedRoute allowedRoles={['patient']}>
+          <PatientHome />
+        </ProtectedRoute>
+      </Route>
+      <Route path="/patient/vitals">
+        <ProtectedRoute allowedRoles={['patient']}>
+          <PatientVitals />
+        </ProtectedRoute>
+      </Route>
+      <Route path="/patient/alerts">
+        <ProtectedRoute allowedRoles={['patient']}>
+          <PatientAlerts />
+        </ProtectedRoute>
+      </Route>
+      <Route path="/patient/files">
+        <ProtectedRoute allowedRoles={['patient']}>
+          <PatientFiles />
+        </ProtectedRoute>
+      </Route>
+      <Route path="/patient/dependents">
+        <ProtectedRoute allowedRoles={['patient']}>
+          <PatientDependents />
+        </ProtectedRoute>
+      </Route>
+      <Route path="/patient/profile">
+        <ProtectedRoute allowedRoles={['patient']}>
+          <PatientProfile />
         </ProtectedRoute>
       </Route>
       <Route path="/settings">

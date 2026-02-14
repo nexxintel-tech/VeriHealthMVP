@@ -77,16 +77,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .eq('id', data.user.id)
         .single();
 
-      if (profileData?.role === 'patient') {
-        if (data.session) {
-          await supabase.auth.admin.signOut(data.session.access_token);
-        }
-        return res.status(403).json({
-          error: "This portal is for clinicians and administrators only. Please use the VeriHealth app at app.verihealths.com to access your health dashboard.",
-          isPatient: true,
-        });
-      }
-
       if (profileData?.role === 'clinician' && userData?.approval_status !== 'approved') {
         // Sign out the user
         if (data.session) {
@@ -185,13 +175,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         profileData = newProfile;
-      }
-
-      if (profileData!.role === 'patient') {
-        return res.status(403).json({
-          error: "This portal is for clinicians and administrators only. Please use the VeriHealth app at app.verihealths.com to access your health dashboard.",
-          isPatient: true,
-        });
       }
 
       if (profileData!.role === 'clinician' && existingUser!.approval_status !== 'approved') {
@@ -2721,6 +2704,897 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching patient dashboard:", error);
       res.status(500).json({ error: "Failed to fetch patient dashboard" });
+    }
+  });
+
+  // ============================================================
+  // Patient-facing API routes
+  // ============================================================
+
+  // 1. GET /api/patient/my-vitals
+  app.get("/api/patient/my-vitals", authenticateUser, requireRole('patient'), async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      const type = req.query.type as string | undefined;
+      const days = parseInt(req.query.days as string) || 30;
+
+      const { data: patient, error: patientError } = await supabase
+        .from("patients")
+        .select("*")
+        .eq("user_id", userId)
+        .single();
+
+      if (patientError || !patient) {
+        return res.status(404).json({ error: "Patient profile not found" });
+      }
+
+      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+      let query = supabase
+        .from("vital_readings")
+        .select("*")
+        .eq("patient_id", patient.id)
+        .gte("timestamp", since)
+        .order("timestamp", { ascending: false });
+
+      if (type) {
+        query = query.eq("type", type);
+      }
+
+      const { data: vitals, error: vitalsError } = await query;
+
+      if (vitalsError) throw vitalsError;
+
+      const transformed = (vitals || []).map((v: any) => ({
+        id: v.id,
+        patientId: v.patient_id,
+        type: v.type,
+        value: v.value,
+        unit: v.unit,
+        timestamp: v.timestamp,
+        status: v.status,
+        createdAt: v.created_at,
+      }));
+
+      res.json(transformed);
+    } catch (error: any) {
+      console.error("Error fetching patient vitals:", error);
+      res.status(500).json({ error: "Failed to fetch vitals" });
+    }
+  });
+
+  // 2. GET /api/patient/my-alerts
+  app.get("/api/patient/my-alerts", authenticateUser, requireRole('patient'), async (req, res) => {
+    try {
+      const userId = req.user!.id;
+
+      const { data: patient, error: patientError } = await supabase
+        .from("patients")
+        .select("*")
+        .eq("user_id", userId)
+        .single();
+
+      if (patientError || !patient) {
+        return res.status(404).json({ error: "Patient profile not found" });
+      }
+
+      const { data: alerts, error: alertsError } = await supabase
+        .from("alerts")
+        .select("*")
+        .eq("patient_id", patient.id)
+        .order("timestamp", { ascending: false })
+        .limit(50);
+
+      if (alertsError) throw alertsError;
+
+      const transformed = (alerts || []).map((a: any) => ({
+        id: a.id,
+        patientId: a.patient_id,
+        type: a.type,
+        message: a.message,
+        severity: a.severity,
+        isRead: a.is_read,
+        timestamp: a.timestamp,
+        createdAt: a.created_at,
+      }));
+
+      res.json(transformed);
+    } catch (error: any) {
+      console.error("Error fetching patient alerts:", error);
+      res.status(500).json({ error: "Failed to fetch alerts" });
+    }
+  });
+
+  // 3. GET /api/patient/my-profile
+  app.get("/api/patient/my-profile", authenticateUser, requireRole('patient'), async (req, res) => {
+    try {
+      const userId = req.user!.id;
+
+      const { data: patient, error: patientError } = await supabase
+        .from("patients")
+        .select("*")
+        .eq("user_id", userId)
+        .single();
+
+      if (patientError || !patient) {
+        return res.status(404).json({ error: "Patient profile not found" });
+      }
+
+      const { data: conditions } = await supabase
+        .from("conditions")
+        .select("name")
+        .eq("patient_id", patient.id);
+
+      const { data: riskScores } = await supabase
+        .from("risk_scores")
+        .select("score, risk_level, last_sync")
+        .eq("patient_id", patient.id)
+        .order("updated_at", { ascending: false })
+        .limit(1);
+
+      const riskScore = riskScores?.[0];
+
+      let clinicianInfo = null;
+      if (patient.assigned_clinician_id) {
+        const { data: clinician } = await supabase
+          .from("users")
+          .select("id, email")
+          .eq("id", patient.assigned_clinician_id)
+          .single();
+
+        if (clinician) {
+          const { data: profile } = await supabase
+            .from("clinician_profiles")
+            .select("full_name, specialty, phone")
+            .eq("user_id", clinician.id)
+            .single();
+
+          clinicianInfo = {
+            id: clinician.id,
+            email: clinician.email,
+            name: profile?.full_name || clinician.email.split('@')[0],
+            specialty: profile?.specialty || 'General Practice',
+            phone: profile?.phone || null,
+          };
+        }
+      }
+
+      let institutionInfo = null;
+      if (patient.institution_id) {
+        const { data: institution } = await supabase
+          .from("institutions")
+          .select("id, name, address, contact_email, contact_phone")
+          .eq("id", patient.institution_id)
+          .single();
+
+        if (institution) {
+          institutionInfo = {
+            id: institution.id,
+            name: institution.name,
+            address: institution.address,
+            contactEmail: institution.contact_email,
+            contactPhone: institution.contact_phone,
+          };
+        }
+      }
+
+      res.json({
+        patient: {
+          id: patient.id,
+          userId: patient.user_id,
+          name: patient.name,
+          age: patient.age,
+          gender: patient.gender,
+          status: patient.status,
+          conditions: conditions?.map((c: any) => c.name) || [],
+          riskScore: riskScore?.score || 0,
+          riskLevel: riskScore?.risk_level || "low",
+          lastSync: riskScore?.last_sync || patient.created_at,
+        },
+        clinician: clinicianInfo,
+        institution: institutionInfo,
+      });
+    } catch (error: any) {
+      console.error("Error fetching patient profile:", error);
+      res.status(500).json({ error: "Failed to fetch profile" });
+    }
+  });
+
+  // 4. PATCH /api/patient/my-profile
+  app.patch("/api/patient/my-profile", authenticateUser, requireRole('patient'), async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      const { name, age, gender } = req.body;
+
+      const { data: patient, error: patientError } = await supabase
+        .from("patients")
+        .select("*")
+        .eq("user_id", userId)
+        .single();
+
+      if (patientError || !patient) {
+        return res.status(404).json({ error: "Patient profile not found" });
+      }
+
+      const updates: Record<string, any> = {};
+
+      if (name !== undefined) {
+        if (typeof name !== 'string' || name.trim().length === 0) {
+          return res.status(400).json({ error: "Name must be a non-empty string" });
+        }
+        updates.name = name.trim();
+      }
+
+      if (age !== undefined) {
+        const parsedAge = parseInt(String(age), 10);
+        if (isNaN(parsedAge) || parsedAge <= 0 || parsedAge > 150) {
+          return res.status(400).json({ error: "Age must be a valid number between 1 and 150" });
+        }
+        updates.age = parsedAge;
+      }
+
+      if (gender !== undefined) {
+        if (typeof gender !== 'string' || gender.trim().length === 0) {
+          return res.status(400).json({ error: "Gender must be a non-empty string" });
+        }
+        updates.gender = gender.trim();
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: "No valid fields to update" });
+      }
+
+      const { data: updated, error: updateError } = await supabase
+        .from("patients")
+        .update(updates)
+        .eq("id", patient.id)
+        .select()
+        .single();
+
+      if (updateError) throw updateError;
+
+      res.json({
+        patient: {
+          id: updated.id,
+          userId: updated.user_id,
+          name: updated.name,
+          age: updated.age,
+          gender: updated.gender,
+          status: updated.status,
+        },
+        message: "Profile updated successfully",
+      });
+    } catch (error: any) {
+      console.error("Error updating patient profile:", error);
+      res.status(500).json({ error: "Failed to update profile" });
+    }
+  });
+
+  // 5. POST /api/patient/files
+  app.post("/api/patient/files", authenticateUser, async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      const { patientId, fileName, fileType, fileSize, category, description, fileData } = req.body;
+
+      if (!patientId || !fileName || !fileType || !fileSize || !fileData) {
+        return res.status(400).json({ error: "patientId, fileName, fileType, fileSize, and fileData are required" });
+      }
+
+      if (fileSize > 10485760) {
+        return res.status(400).json({ error: "File size must not exceed 10MB" });
+      }
+
+      const validCategories = ['lab_result', 'prescription', 'referral', 'imaging', 'general'];
+      const fileCategory = category || 'general';
+      if (!validCategories.includes(fileCategory)) {
+        return res.status(400).json({ error: `Category must be one of: ${validCategories.join(', ')}` });
+      }
+
+      const { data: targetPatient, error: targetPatientError } = await supabase
+        .from("patients")
+        .select("*")
+        .eq("id", patientId)
+        .single();
+
+      if (targetPatientError || !targetPatient) {
+        return res.status(404).json({ error: "Patient not found" });
+      }
+
+      if (targetPatient.user_id !== userId) {
+        const { data: sponsorAccess, error: sponsorError } = await supabase
+          .from("sponsor_dependents")
+          .select("*")
+          .eq("sponsor_user_id", userId)
+          .eq("dependent_patient_id", patientId)
+          .eq("status", "approved")
+          .single();
+
+        if (sponsorError || !sponsorAccess) {
+          return res.status(403).json({ error: "You do not have access to upload files for this patient" });
+        }
+      }
+
+      const { data: file, error: fileError } = await supabase
+        .from("file_attachments")
+        .insert({
+          patient_id: patientId,
+          uploaded_by_user_id: userId,
+          file_name: fileName,
+          file_type: fileType,
+          file_size: fileSize,
+          category: fileCategory,
+          description: description || null,
+          file_data: fileData,
+        })
+        .select()
+        .single();
+
+      if (fileError) throw fileError;
+
+      res.status(201).json({
+        id: file.id,
+        patientId: file.patient_id,
+        uploadedByUserId: file.uploaded_by_user_id,
+        fileName: file.file_name,
+        fileType: file.file_type,
+        fileSize: file.file_size,
+        category: file.category,
+        description: file.description,
+        createdAt: file.created_at,
+      });
+    } catch (error: any) {
+      console.error("Error uploading file:", error);
+      res.status(500).json({ error: "Failed to upload file" });
+    }
+  });
+
+  // 6. GET /api/patient/files
+  app.get("/api/patient/files", authenticateUser, async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      const queryPatientId = req.query.patientId as string | undefined;
+
+      let targetPatientId: string;
+
+      if (queryPatientId) {
+        const { data: sponsorAccess, error: sponsorError } = await supabase
+          .from("sponsor_dependents")
+          .select("*")
+          .eq("sponsor_user_id", userId)
+          .eq("dependent_patient_id", queryPatientId)
+          .eq("status", "approved")
+          .single();
+
+        if (sponsorError || !sponsorAccess) {
+          const { data: targetPatient } = await supabase
+            .from("patients")
+            .select("user_id")
+            .eq("id", queryPatientId)
+            .single();
+
+          if (!targetPatient || targetPatient.user_id !== userId) {
+            return res.status(403).json({ error: "You do not have access to this patient's files" });
+          }
+        }
+
+        targetPatientId = queryPatientId;
+      } else {
+        const { data: patient, error: patientError } = await supabase
+          .from("patients")
+          .select("*")
+          .eq("user_id", userId)
+          .single();
+
+        if (patientError || !patient) {
+          return res.status(404).json({ error: "Patient profile not found" });
+        }
+
+        targetPatientId = patient.id;
+      }
+
+      const { data: files, error: filesError } = await supabase
+        .from("file_attachments")
+        .select("id, patient_id, uploaded_by_user_id, file_name, file_type, file_size, category, description, created_at")
+        .eq("patient_id", targetPatientId)
+        .order("created_at", { ascending: false });
+
+      if (filesError) throw filesError;
+
+      const transformed = (files || []).map((f: any) => ({
+        id: f.id,
+        patientId: f.patient_id,
+        uploadedByUserId: f.uploaded_by_user_id,
+        fileName: f.file_name,
+        fileType: f.file_type,
+        fileSize: f.file_size,
+        category: f.category,
+        description: f.description,
+        createdAt: f.created_at,
+      }));
+
+      res.json(transformed);
+    } catch (error: any) {
+      console.error("Error fetching files:", error);
+      res.status(500).json({ error: "Failed to fetch files" });
+    }
+  });
+
+  // 7. GET /api/patient/files/:id
+  app.get("/api/patient/files/:id", authenticateUser, async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      const fileId = req.params.id;
+
+      const { data: file, error: fileError } = await supabase
+        .from("file_attachments")
+        .select("*")
+        .eq("id", fileId)
+        .single();
+
+      if (fileError || !file) {
+        return res.status(404).json({ error: "File not found" });
+      }
+
+      const { data: filePatient } = await supabase
+        .from("patients")
+        .select("user_id")
+        .eq("id", file.patient_id)
+        .single();
+
+      if (!filePatient || filePatient.user_id !== userId) {
+        const { data: sponsorAccess } = await supabase
+          .from("sponsor_dependents")
+          .select("*")
+          .eq("sponsor_user_id", userId)
+          .eq("dependent_patient_id", file.patient_id)
+          .eq("status", "approved")
+          .single();
+
+        if (!sponsorAccess) {
+          return res.status(403).json({ error: "You do not have access to this file" });
+        }
+      }
+
+      res.json({
+        id: file.id,
+        patientId: file.patient_id,
+        uploadedByUserId: file.uploaded_by_user_id,
+        fileName: file.file_name,
+        fileType: file.file_type,
+        fileSize: file.file_size,
+        category: file.category,
+        description: file.description,
+        fileData: file.file_data,
+        createdAt: file.created_at,
+      });
+    } catch (error: any) {
+      console.error("Error fetching file:", error);
+      res.status(500).json({ error: "Failed to fetch file" });
+    }
+  });
+
+  // 8. DELETE /api/patient/files/:id
+  app.delete("/api/patient/files/:id", authenticateUser, async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      const fileId = req.params.id;
+
+      const { data: file, error: fileError } = await supabase
+        .from("file_attachments")
+        .select("id, uploaded_by_user_id")
+        .eq("id", fileId)
+        .single();
+
+      if (fileError || !file) {
+        return res.status(404).json({ error: "File not found" });
+      }
+
+      if (file.uploaded_by_user_id !== userId) {
+        return res.status(403).json({ error: "Only the uploader can delete this file" });
+      }
+
+      const { error: deleteError } = await supabase
+        .from("file_attachments")
+        .delete()
+        .eq("id", fileId);
+
+      if (deleteError) throw deleteError;
+
+      res.json({ message: "File deleted successfully" });
+    } catch (error: any) {
+      console.error("Error deleting file:", error);
+      res.status(500).json({ error: "Failed to delete file" });
+    }
+  });
+
+  // 9. GET /api/patient/dependents
+  app.get("/api/patient/dependents", authenticateUser, requireRole('patient'), async (req, res) => {
+    try {
+      const userId = req.user!.id;
+
+      const { data: dependents, error: dependentsError } = await supabase
+        .from("sponsor_dependents")
+        .select("*")
+        .eq("sponsor_user_id", userId);
+
+      if (dependentsError) throw dependentsError;
+
+      const enriched = await Promise.all(
+        (dependents || []).map(async (dep: any) => {
+          const { data: patient } = await supabase
+            .from("patients")
+            .select("id, name, age, gender, status")
+            .eq("id", dep.dependent_patient_id)
+            .single();
+
+          return {
+            id: dep.id,
+            sponsorUserId: dep.sponsor_user_id,
+            dependentPatientId: dep.dependent_patient_id,
+            status: dep.status,
+            relationship: dep.relationship,
+            createdAt: dep.created_at,
+            approvedAt: dep.approved_at,
+            patient: patient ? {
+              id: patient.id,
+              name: patient.name,
+              age: patient.age,
+              gender: patient.gender,
+              status: patient.status,
+            } : null,
+          };
+        })
+      );
+
+      res.json(enriched);
+    } catch (error: any) {
+      console.error("Error fetching dependents:", error);
+      res.status(500).json({ error: "Failed to fetch dependents" });
+    }
+  });
+
+  // 10. POST /api/patient/dependents/request
+  app.post("/api/patient/dependents/request", authenticateUser, requireRole('patient'), async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      const { dependentEmail, relationship } = req.body;
+
+      if (!dependentEmail) {
+        return res.status(400).json({ error: "dependentEmail is required" });
+      }
+
+      const { data: dependentUser, error: userError } = await supabase
+        .from("users")
+        .select("id")
+        .eq("email", dependentEmail.toLowerCase())
+        .single();
+
+      if (userError || !dependentUser) {
+        return res.status(404).json({ error: "No user found with that email address" });
+      }
+
+      const { data: dependentPatient, error: patientError } = await supabase
+        .from("patients")
+        .select("id")
+        .eq("user_id", dependentUser.id)
+        .single();
+
+      if (patientError || !dependentPatient) {
+        return res.status(404).json({ error: "No patient profile found for that email address" });
+      }
+
+      const { data: existing } = await supabase
+        .from("sponsor_dependents")
+        .select("id, status")
+        .eq("sponsor_user_id", userId)
+        .eq("dependent_patient_id", dependentPatient.id)
+        .single();
+
+      if (existing) {
+        return res.status(400).json({ error: `A sponsor request already exists with status: ${existing.status}` });
+      }
+
+      const { data: record, error: insertError } = await supabase
+        .from("sponsor_dependents")
+        .insert({
+          sponsor_user_id: userId,
+          dependent_patient_id: dependentPatient.id,
+          status: "pending",
+          relationship: relationship || null,
+        })
+        .select()
+        .single();
+
+      if (insertError) throw insertError;
+
+      res.status(201).json({
+        id: record.id,
+        sponsorUserId: record.sponsor_user_id,
+        dependentPatientId: record.dependent_patient_id,
+        status: record.status,
+        relationship: record.relationship,
+        createdAt: record.created_at,
+      });
+    } catch (error: any) {
+      console.error("Error creating sponsor request:", error);
+      res.status(500).json({ error: "Failed to create sponsor request" });
+    }
+  });
+
+  // 11. GET /api/patient/sponsor-requests
+  app.get("/api/patient/sponsor-requests", authenticateUser, requireRole('patient'), async (req, res) => {
+    try {
+      const userId = req.user!.id;
+
+      const { data: patient, error: patientError } = await supabase
+        .from("patients")
+        .select("*")
+        .eq("user_id", userId)
+        .single();
+
+      if (patientError || !patient) {
+        return res.status(404).json({ error: "Patient profile not found" });
+      }
+
+      const { data: requests, error: requestsError } = await supabase
+        .from("sponsor_dependents")
+        .select("*")
+        .eq("dependent_patient_id", patient.id)
+        .eq("status", "pending");
+
+      if (requestsError) throw requestsError;
+
+      const enriched = await Promise.all(
+        (requests || []).map(async (req_item: any) => {
+          const { data: sponsorUser } = await supabase
+            .from("users")
+            .select("id, email")
+            .eq("id", req_item.sponsor_user_id)
+            .single();
+
+          return {
+            id: req_item.id,
+            sponsorUserId: req_item.sponsor_user_id,
+            dependentPatientId: req_item.dependent_patient_id,
+            status: req_item.status,
+            relationship: req_item.relationship,
+            createdAt: req_item.created_at,
+            sponsor: sponsorUser ? {
+              id: sponsorUser.id,
+              email: sponsorUser.email,
+            } : null,
+          };
+        })
+      );
+
+      res.json(enriched);
+    } catch (error: any) {
+      console.error("Error fetching sponsor requests:", error);
+      res.status(500).json({ error: "Failed to fetch sponsor requests" });
+    }
+  });
+
+  // 12. PATCH /api/patient/sponsor-requests/:id
+  app.patch("/api/patient/sponsor-requests/:id", authenticateUser, requireRole('patient'), async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      const requestId = req.params.id;
+      const { action } = req.body;
+
+      if (!action || !['approve', 'reject'].includes(action)) {
+        return res.status(400).json({ error: "action must be 'approve' or 'reject'" });
+      }
+
+      const { data: patient, error: patientError } = await supabase
+        .from("patients")
+        .select("*")
+        .eq("user_id", userId)
+        .single();
+
+      if (patientError || !patient) {
+        return res.status(404).json({ error: "Patient profile not found" });
+      }
+
+      const { data: request, error: requestError } = await supabase
+        .from("sponsor_dependents")
+        .select("*")
+        .eq("id", requestId)
+        .single();
+
+      if (requestError || !request) {
+        return res.status(404).json({ error: "Sponsor request not found" });
+      }
+
+      if (request.dependent_patient_id !== patient.id) {
+        return res.status(403).json({ error: "Only the dependent patient can approve or reject this request" });
+      }
+
+      if (request.status !== 'pending') {
+        return res.status(400).json({ error: `This request has already been ${request.status}` });
+      }
+
+      const updates: Record<string, any> = {
+        status: action === 'approve' ? 'approved' : 'rejected',
+      };
+
+      if (action === 'approve') {
+        updates.approved_at = new Date().toISOString();
+      }
+
+      const { data: updated, error: updateError } = await supabase
+        .from("sponsor_dependents")
+        .update(updates)
+        .eq("id", requestId)
+        .select()
+        .single();
+
+      if (updateError) throw updateError;
+
+      res.json({
+        id: updated.id,
+        sponsorUserId: updated.sponsor_user_id,
+        dependentPatientId: updated.dependent_patient_id,
+        status: updated.status,
+        relationship: updated.relationship,
+        createdAt: updated.created_at,
+        approvedAt: updated.approved_at,
+        message: `Sponsor request ${action === 'approve' ? 'approved' : 'rejected'} successfully`,
+      });
+    } catch (error: any) {
+      console.error("Error updating sponsor request:", error);
+      res.status(500).json({ error: "Failed to update sponsor request" });
+    }
+  });
+
+  // 13. GET /api/patient/dependent/:patientId/dashboard
+  app.get("/api/patient/dependent/:patientId/dashboard", authenticateUser, async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      const dependentPatientId = req.params.patientId;
+
+      const { data: sponsorAccess, error: sponsorError } = await supabase
+        .from("sponsor_dependents")
+        .select("*")
+        .eq("sponsor_user_id", userId)
+        .eq("dependent_patient_id", dependentPatientId)
+        .eq("status", "approved")
+        .single();
+
+      if (sponsorError || !sponsorAccess) {
+        return res.status(403).json({ error: "You do not have approved access to this dependent's dashboard" });
+      }
+
+      const { data: patient, error: patientError } = await supabase
+        .from("patients")
+        .select("*")
+        .eq("id", dependentPatientId)
+        .single();
+
+      if (patientError || !patient) {
+        return res.status(404).json({ error: "Patient not found" });
+      }
+
+      const { data: conditions } = await supabase
+        .from("conditions")
+        .select("name")
+        .eq("patient_id", patient.id);
+
+      const { data: riskScoresData } = await supabase
+        .from("risk_scores")
+        .select("score, risk_level, last_sync")
+        .eq("patient_id", patient.id)
+        .order("updated_at", { ascending: false })
+        .limit(1);
+
+      const riskScore = riskScoresData?.[0];
+
+      const { data: rawVitals } = await supabase
+        .from("vital_readings")
+        .select("*")
+        .eq("patient_id", patient.id)
+        .gte("timestamp", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+        .order("timestamp", { ascending: false });
+
+      const transformVital = (v: any) => ({
+        id: v.id,
+        patientId: v.patient_id,
+        type: v.type,
+        value: v.value,
+        unit: v.unit,
+        timestamp: v.timestamp,
+        status: v.status,
+      });
+
+      const recentVitals = rawVitals?.map(transformVital) || [];
+
+      const vitalsByType: Record<string, any> = {};
+      recentVitals.forEach(v => {
+        if (!vitalsByType[v.type]) {
+          vitalsByType[v.type] = v;
+        }
+      });
+
+      let clinicianInfo = null;
+      if (patient.assigned_clinician_id) {
+        const { data: clinician } = await supabase
+          .from("users")
+          .select("id, email")
+          .eq("id", patient.assigned_clinician_id)
+          .single();
+
+        if (clinician) {
+          const { data: profile } = await supabase
+            .from("clinician_profiles")
+            .select("full_name, specialty, phone")
+            .eq("user_id", clinician.id)
+            .single();
+
+          clinicianInfo = {
+            id: clinician.id,
+            email: clinician.email,
+            name: profile?.full_name || clinician.email.split('@')[0],
+            specialty: profile?.specialty || 'General Practice',
+            phone: profile?.phone || null,
+          };
+        }
+      }
+
+      let institutionInfo = null;
+      if (patient.institution_id) {
+        const { data: institution } = await supabase
+          .from("institutions")
+          .select("id, name, address, contact_email, contact_phone")
+          .eq("id", patient.institution_id)
+          .single();
+
+        if (institution) {
+          institutionInfo = {
+            id: institution.id,
+            name: institution.name,
+            address: institution.address,
+            contactEmail: institution.contact_email,
+            contactPhone: institution.contact_phone,
+          };
+        }
+      }
+
+      const { data: rawAlerts } = await supabase
+        .from("alerts")
+        .select("id, type, message, severity, is_read, timestamp")
+        .eq("patient_id", patient.id)
+        .order("timestamp", { ascending: false })
+        .limit(5);
+
+      const recentAlerts = rawAlerts?.map((a: any) => ({
+        id: a.id,
+        type: a.type,
+        message: a.message,
+        severity: a.severity,
+        isRead: a.is_read,
+        timestamp: a.timestamp,
+      })) || [];
+
+      res.json({
+        patient: {
+          id: patient.id,
+          name: patient.name,
+          age: patient.age,
+          gender: patient.gender,
+          status: patient.status,
+          conditions: conditions?.map((c: any) => c.name) || [],
+          riskScore: riskScore?.score || 0,
+          riskLevel: riskScore?.risk_level || "low",
+          lastSync: riskScore?.last_sync || patient.created_at,
+        },
+        latestVitals: vitalsByType,
+        recentVitals: recentVitals,
+        clinician: clinicianInfo,
+        institution: institutionInfo,
+        recentAlerts: recentAlerts,
+      });
+    } catch (error: any) {
+      console.error("Error fetching dependent dashboard:", error);
+      res.status(500).json({ error: "Failed to fetch dependent dashboard" });
     }
   });
 
