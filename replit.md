@@ -85,8 +85,22 @@ The VeriHealth platform consists of two separate web applications:
 - The `users` table stores identity data (email, approval_status) only — NOT roles
 - `/api/session/check` endpoint returns `{ok, userId, role, institutionId}` from `user_profiles`
 - Patient role blocked from verihealth.com dashboard login (redirected to app.verihealths.com)
+- Rate limiting: All auth endpoints (login, register, verify-invite, logout, forgot-password, reset-password, resend-confirmation) rate limited to 10 requests per 15 minutes per IP
+- `requireApproved` middleware enforced on all clinician-accessible endpoints (patients, vitals, alerts, dashboard, claim, top-performers)
+- Client-side role enforcement: Admin pages use `allowedRoles` on ProtectedRoute; unauthorized roles redirect to dashboard (not logout)
 - Problem: Need secure, healthcare-compliant user authentication with consistent role source across all clients
 - Solution: Supabase Auth provides HIPAA-eligible authentication; `user_profiles` ensures single role source for dashboard, Median app, BLE, and WhatsApp clients
+
+**Security Hardening (Applied Feb 2026)**
+- HTML sanitization in admin email feature (prevents XSS via email content)
+- CSV export: double-quote escaping to prevent formula injection
+- ES module `crypto` import (replaced inline `require('crypto')`)
+- Age validation: rejects 0, NaN, strings, negative, >150 in registration and complete-profile
+- Atomic patient record creation during registration (fails entire registration if patient creation fails)
+- Institution admin patient visibility: sees all patients in their institution (not just assigned)
+- Invite system: frontend reads `?invite={token}`, verifies via `/api/auth/verify-invite`, locks email field
+- Resend-confirmation: targeted user lookup instead of `listUsers()` to avoid loading all users
+- Top performers query: bounded with `.limit(1000)` to prevent unbounded results
 
 **Patient-Clinician Matching System**
 - Patients who register without an invite link are auto-assigned to the default institution with `assigned_clinician_id = null`
