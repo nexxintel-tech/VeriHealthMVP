@@ -19,6 +19,7 @@ import Settings from "@/pages/Settings";
 import { ClinicianRegister } from "@/pages/ClinicianRegister";
 import { ClinicianApprovals } from "@/pages/ClinicianApprovals";
 import { AdminPanel } from "@/pages/AdminPanel";
+import AuthCallback from "@/pages/AuthCallback";
 
 function Router() {
   // Enable realtime updates
@@ -32,6 +33,7 @@ function Router() {
       <Route path="/forgot-password" component={ForgotPassword} />
       <Route path="/reset-password" component={ResetPassword} />
       <Route path="/confirm-email" component={ConfirmEmail} />
+      <Route path="/auth/callback" component={AuthCallback} />
       <Route path="/">
         <ProtectedRoute>
           <Dashboard />

@@ -73,3 +73,5 @@ integrations = ["resend:1.0.0"]
 [userenv.shared]
 SUPABASE_URL = "https://qattrpqkbdkxogranrse.supabase.co"
 VITE_DASHBOARD_URL = "http://localhost:5000"
+VITE_SUPABASE_URL = "https://qattrpqkbdkxogranrse.supabase.co"
+VITE_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFhdHRycHFrYmRreG9ncmFucnNlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjM4NjQ0NTYsImV4cCI6MjA3OTQ0MDQ1Nn0.VWLRReSATRAxoA9WRSXAxLhW4VZ1q1DBfO6Ajle1uQA"

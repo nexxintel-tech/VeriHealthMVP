@@ -81,6 +81,11 @@ The VeriHealth platform consists of two separate web applications:
 - Password reset via secure token system
 - Role-based access: patient, clinician, admin, institution_admin
 - Supabase native token verification (NOT custom JWT) via `supabase.auth.getUser(token)`
+- Google OAuth sign-in via Supabase Auth (requires Google provider enabled in Supabase dashboard)
+  - Frontend uses `@supabase/supabase-js` client with `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`
+  - OAuth callback handled at `/auth/callback` route
+  - Backend `/api/auth/google-callback` auto-creates user records for new Google users (default: patient role)
+  - Google sign-in available on Login and Register pages
 - Canonical role source: `public.user_profiles.role` (per Guardrail document)
 - The `users` table stores identity data (email, approval_status) only — NOT roles
 - `/api/session/check` endpoint returns `{ok, userId, role, institutionId}` from `user_profiles`

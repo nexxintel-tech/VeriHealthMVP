@@ -30,9 +30,9 @@ function rateLimit(windowMs: number, maxRequests: number) {
 
 setInterval(() => {
   const now = Date.now();
-  for (const [key, entry] of rateLimitStore) {
+  rateLimitStore.forEach((entry, key) => {
     if (now > entry.resetAt) rateLimitStore.delete(key);
-  }
+  });
 }, 60000);
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -110,6 +110,114 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Login error:", error);
       res.status(401).json({ error: error.message || "Invalid credentials" });
+    }
+  });
+
+  app.post("/api/auth/google-callback", authRateLimit, async (req, res) => {
+    try {
+      const { access_token, refresh_token } = req.body;
+
+      if (!access_token) {
+        return res.status(400).json({ error: "Access token is required" });
+      }
+
+      const { data: { user }, error: authError } = await supabase.auth.getUser(access_token);
+
+      if (authError || !user) {
+        return res.status(401).json({ error: "Invalid token" });
+      }
+
+      let { data: existingUser } = await supabase
+        .from('users')
+        .select('id, email, approval_status')
+        .eq('id', user.id)
+        .single();
+
+      if (!existingUser) {
+        const { data: newUser, error: createUserError } = await supabase
+          .from('users')
+          .insert({
+            id: user.id,
+            email: user.email,
+            approval_status: null,
+          })
+          .select()
+          .single();
+
+        if (createUserError) {
+          console.error("Error creating user record for Google auth:", createUserError);
+          return res.status(500).json({ error: "Failed to create user account" });
+        }
+
+        existingUser = newUser;
+      }
+
+      let { data: profileData } = await supabase
+        .from('user_profiles')
+        .select('user_id, role, institution_id')
+        .eq('user_id', user.id)
+        .single();
+
+      if (!profileData) {
+        let defaultInstitutionId: string | null = null;
+        const { data: defaultInst } = await supabase
+          .from('institutions')
+          .select('id')
+          .eq('is_default', true)
+          .single();
+        if (defaultInst) {
+          defaultInstitutionId = defaultInst.id;
+        }
+
+        const { data: newProfile, error: profileError } = await supabase
+          .from('user_profiles')
+          .insert({
+            user_id: user.id,
+            role: 'patient',
+            institution_id: defaultInstitutionId,
+          })
+          .select()
+          .single();
+
+        if (profileError) {
+          console.error("Error creating user profile for Google auth:", profileError);
+          return res.status(500).json({ error: "Failed to create user profile" });
+        }
+
+        profileData = newProfile;
+      }
+
+      if (profileData!.role === 'patient') {
+        return res.status(403).json({
+          error: "This portal is for clinicians and administrators only. Please use the VeriHealth app at app.verihealths.com to access your health dashboard.",
+          isPatient: true,
+        });
+      }
+
+      if (profileData!.role === 'clinician' && existingUser!.approval_status !== 'approved') {
+        const statusMessage = existingUser!.approval_status === 'rejected'
+          ? "Your clinician registration was rejected. Please contact your institution administrator."
+          : "Your clinician account is pending approval by your institution administrator.";
+        return res.status(403).json({
+          error: statusMessage,
+          approvalStatus: existingUser!.approval_status,
+        });
+      }
+
+      res.json({
+        user: {
+          id: user.id,
+          email: user.email,
+          role: profileData!.role,
+        },
+        session: {
+          access_token,
+          refresh_token,
+        },
+      });
+    } catch (error: any) {
+      console.error("Google auth callback error:", error);
+      res.status(500).json({ error: "Google authentication failed" });
     }
   });
 
