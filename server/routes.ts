@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import crypto from "crypto";
 import { supabase } from "./supabase";
 import { authenticateUser, requireRole, requireApproved } from "./middleware/auth";
 import { sendEmail, generateConfirmationEmail, generatePasswordResetEmail } from "./email";
@@ -82,36 +83,62 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/auth/register", async (req, res) => {
     try {
-      const { email, password, fullName, age, gender, institutionCode } = req.body;
+      const { email, password, fullName, age, gender, institutionCode, inviteToken } = req.body;
 
       if (!email || !password) {
         return res.status(400).json({ error: "Email and password are required" });
       }
 
-      const role = 'patient';
-
+      let role: string = 'patient';
       let targetInstitutionId: string | null = null;
+      let inviteId: string | null = null;
 
-      if (institutionCode) {
-        const { data: inst } = await supabase
-          .from('institutions')
-          .select('id, name')
-          .eq('id', institutionCode)
+      if (inviteToken) {
+        const { data: invite, error: inviteError } = await supabase
+          .from('user_invites')
+          .select('*')
+          .eq('token', inviteToken)
+          .eq('status', 'pending')
           .single();
 
-        if (!inst) {
-          return res.status(400).json({ error: "Invalid institution code. Please check and try again." });
+        if (inviteError || !invite) {
+          return res.status(400).json({ error: "Invalid or already used invitation link." });
         }
-        targetInstitutionId = inst.id;
-      } else {
-        const { data: defaultInst } = await supabase
-          .from('institutions')
-          .select('id')
-          .eq('is_default', true)
-          .single();
 
-        if (defaultInst) {
-          targetInstitutionId = defaultInst.id;
+        if (new Date(invite.expires_at) < new Date()) {
+          await supabase.from('user_invites').update({ status: 'expired' }).eq('id', invite.id);
+          return res.status(400).json({ error: "This invitation has expired. Please request a new one." });
+        }
+
+        if (invite.email.toLowerCase() !== email.toLowerCase()) {
+          return res.status(400).json({ error: "This invitation was sent to a different email address." });
+        }
+
+        role = invite.role || 'patient';
+        targetInstitutionId = invite.institution_id;
+        inviteId = invite.id;
+      } else {
+        if (institutionCode) {
+          const { data: inst } = await supabase
+            .from('institutions')
+            .select('id, name')
+            .eq('id', institutionCode)
+            .single();
+
+          if (!inst) {
+            return res.status(400).json({ error: "Invalid institution code. Please check and try again." });
+          }
+          targetInstitutionId = inst.id;
+        } else {
+          const { data: defaultInst } = await supabase
+            .from('institutions')
+            .select('id')
+            .eq('is_default', true)
+            .single();
+
+          if (defaultInst) {
+            targetInstitutionId = defaultInst.id;
+          }
         }
       }
 
@@ -128,11 +155,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ error: "Failed to create user" });
       }
 
+      const approvalStatus = (role === 'institution_admin') ? 'approved' : (role === 'clinician' ? 'pending' : null);
+
       const { error: userError } = await supabase
         .from('users')
         .insert({
           id: authData.user.id,
           email: authData.user.email!,
+          approval_status: approvalStatus,
         });
 
       if (userError) {
@@ -154,22 +184,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
         throw profileInsertError;
       }
 
-      if (fullName && age && gender) {
-        const { error: patientError } = await supabase
-          .from('patients')
-          .insert({
-            user_id: authData.user.id,
-            name: fullName,
-            age: parseInt(age, 10),
-            gender,
-            institution_id: targetInstitutionId,
-            assigned_clinician_id: null,
-            status: 'Active',
-          });
+      if (role === 'patient' && fullName && age !== undefined && age !== null && age !== '' && gender) {
+        const parsedAge = parseInt(String(age), 10);
+        if (!isNaN(parsedAge) && parsedAge >= 0) {
+          const { error: patientError } = await supabase
+            .from('patients')
+            .insert({
+              user_id: authData.user.id,
+              name: fullName,
+              age: parsedAge,
+              gender,
+              institution_id: targetInstitutionId,
+              assigned_clinician_id: null,
+              status: 'Active',
+            });
 
-        if (patientError) {
-          console.error("Error creating patient record:", patientError);
+          if (patientError) {
+            await supabase.from('user_profiles').delete().eq('user_id', authData.user.id);
+            await supabase.from('users').delete().eq('id', authData.user.id);
+            await supabase.auth.admin.deleteUser(authData.user.id);
+            throw patientError;
+          }
         }
+      }
+
+      if (inviteId) {
+        await supabase.from('user_invites').update({ status: 'used' }).eq('id', inviteId);
       }
 
       if (emailConfirmationEnabled && !authData.session) {
@@ -211,6 +251,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/auth/verify-invite", async (req, res) => {
+    try {
+      const { token } = req.query;
+
+      if (!token || typeof token !== 'string') {
+        return res.status(400).json({ error: "Token is required" });
+      }
+
+      const { data: invite, error } = await supabase
+        .from('user_invites')
+        .select('email, role, status, expires_at')
+        .eq('token', token)
+        .eq('status', 'pending')
+        .single();
+
+      if (error || !invite) {
+        return res.status(404).json({ error: "Invalid or expired invitation" });
+      }
+
+      if (new Date(invite.expires_at) < new Date()) {
+        return res.status(400).json({ error: "This invitation has expired" });
+      }
+
+      res.json({ email: invite.email, role: invite.role });
+    } catch (error) {
+      console.error("Verify invite error:", error);
+      res.status(500).json({ error: "Failed to verify invitation" });
+    }
+  });
+
   app.post("/api/patient/complete-profile", authenticateUser, async (req, res) => {
     try {
       const userId = req.user!.id;
@@ -222,8 +292,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { fullName, age, gender, institutionCode } = req.body;
 
-      if (!fullName || !age || !gender) {
+      if (!fullName || age === undefined || age === null || age === '' || !gender) {
         return res.status(400).json({ error: "Full name, age, and gender are required" });
+      }
+
+      const parsedAge = parseInt(String(age), 10);
+      if (isNaN(parsedAge) || parsedAge < 0 || parsedAge > 150) {
+        return res.status(400).json({ error: "Please provide a valid age" });
       }
 
       const { data: existingPatient } = await supabase
@@ -266,7 +341,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .insert({
           user_id: userId,
           name: fullName,
-          age: parseInt(age, 10),
+          age: parsedAge,
           gender,
           institution_id: targetInstitutionId,
           assigned_clinician_id: null,
@@ -291,7 +366,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/patients/unassigned", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), async (req, res) => {
+  app.get("/api/patients/unassigned", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), requireApproved, async (req, res) => {
     try {
       const userId = req.user!.id;
       const userRole = req.user!.role;
@@ -338,7 +413,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/patients/:id/claim", authenticateUser, requireRole('clinician'), async (req, res) => {
+  app.post("/api/patients/:id/claim", authenticateUser, requireRole('clinician'), requireApproved, async (req, res) => {
     try {
       const { id } = req.params;
       const clinicianId = req.user!.id;
@@ -528,12 +603,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Email is required" });
       }
 
-      // Get user to verify they exist
-      const { data: { users }, error: getUserError } = await supabase.auth.admin.listUsers();
-      const user = users.find(u => u.email === email);
+      const { data: userRecord } = await supabase.from('users').select('id').eq('email', email).single();
+      if (!userRecord) {
+        return res.json({ message: "If an account exists with this email, a confirmation link has been sent." });
+      }
+      const { data: { user: authUser } } = await supabase.auth.admin.getUserById(userRecord.id);
+      const user = authUser;
 
       if (!user) {
-        // Don't reveal if user exists for security
         return res.json({ message: "If an account exists with this email, a confirmation link has been sent." });
       }
 
@@ -667,7 +744,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // - Clinicians: see only patients assigned to them
   // - Institution admins: see only patients assigned to them
   // - Admins: see all patients
-  app.get("/api/patients", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), async (req, res) => {
+  app.get("/api/patients", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), requireApproved, async (req, res) => {
     try {
       const userId = req.user!.id;
       const userRole = req.user!.role;
@@ -677,8 +754,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from("patients")
         .select("*");
 
-      if (userRole === 'clinician' || userRole === 'institution_admin') {
+      if (userRole === 'clinician') {
         patientsQuery = patientsQuery.eq('assigned_clinician_id', userId);
+      } else if (userRole === 'institution_admin' && userInstitutionId) {
+        patientsQuery = patientsQuery.eq('institution_id', userInstitutionId);
       }
       // Admins see all patients (no filter)
 
@@ -741,7 +820,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get single patient with full details
-  app.get("/api/patients/:id", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), async (req, res) => {
+  app.get("/api/patients/:id", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), requireApproved, async (req, res) => {
     try {
       const { id } = req.params;
       const userId = req.user!.id;
@@ -757,8 +836,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (patientError) throw patientError;
 
-      if ((userRole === 'clinician' || userRole === 'institution_admin') && patient.assigned_clinician_id !== userId) {
+      if (userRole === 'clinician' && patient.assigned_clinician_id !== userId) {
         return res.status(403).json({ error: "Access denied - patient not assigned to you" });
+      }
+      if (userRole === 'institution_admin' && userInstitutionId && patient.institution_id !== userInstitutionId) {
+        return res.status(403).json({ error: "Access denied - patient not in your institution" });
       }
 
       // Fetch latest risk score
@@ -797,7 +879,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get vital readings for a patient
-  app.get("/api/patients/:id/vitals", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), async (req, res) => {
+  app.get("/api/patients/:id/vitals", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), requireApproved, async (req, res) => {
     try {
       const { id } = req.params;
       const { type, days = 7 } = req.query;
@@ -812,8 +894,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .eq("id", id)
         .single();
 
-      if ((userRole === 'clinician' || userRole === 'institution_admin') && patient?.assigned_clinician_id !== userId) {
+      if (userRole === 'clinician' && patient?.assigned_clinician_id !== userId) {
         return res.status(403).json({ error: "Access denied - patient not assigned to you" });
+      }
+      if (userRole === 'institution_admin' && userInstitutionId && patient?.institution_id !== userInstitutionId) {
+        return res.status(403).json({ error: "Access denied - patient not in your institution" });
       }
 
       let query = supabase
@@ -842,7 +927,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // - Clinicians: see only alerts for patients assigned to them
   // - Institution admins: NO access (they manage clinicians, not patients)
   // - Admins: see all alerts
-  app.get("/api/alerts", authenticateUser, requireRole('clinician', 'admin'), async (req, res) => {
+  app.get("/api/alerts", authenticateUser, requireRole('clinician', 'admin'), requireApproved, async (req, res) => {
     try {
       const userId = req.user!.id;
       const userRole = req.user!.role;
@@ -902,7 +987,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Mark alert as read (with ownership verification)
   // Institution admins cannot access alerts - they manage clinicians, not patients
-  app.patch("/api/alerts/:id", authenticateUser, requireRole('clinician', 'admin'), async (req, res) => {
+  app.patch("/api/alerts/:id", authenticateUser, requireRole('clinician', 'admin'), requireApproved, async (req, res) => {
     try {
       const { id } = req.params;
       const { isRead } = req.body;
@@ -954,7 +1039,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // - Clinicians: see patient stats for their assigned patients
   // - Institution admins: see clinician stats for their institution
   // - Admins: see global patient stats
-  app.get("/api/dashboard/stats", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), async (req, res) => {
+  app.get("/api/dashboard/stats", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), requireApproved, async (req, res) => {
     try {
       const userId = req.user!.id;
       const userRole = req.user!.role;
@@ -1382,6 +1467,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "User not found" });
       }
 
+      if (role === 'institution_admin') {
+        const { data: existingProfile } = await supabase
+          .from('clinician_profiles')
+          .select('user_id')
+          .eq('user_id', id)
+          .single();
+
+        if (!existingProfile) {
+          const { data: userData } = await supabase
+            .from('users')
+            .select('email')
+            .eq('id', id)
+            .single();
+
+          const fullName = userData?.email?.split('@')[0] || 'Admin';
+
+          await supabase
+            .from('clinician_profiles')
+            .insert({
+              user_id: id,
+              full_name: fullName,
+            });
+        }
+      }
+
       res.json({ message: "User role updated successfully", user: upData });
     } catch (error) {
       console.error("Error updating user role:", error);
@@ -1781,6 +1891,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "User not found" });
       }
 
+      const sanitizedMessage = message
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/\n/g, '<br>');
+
       await sendEmail({
         to: user.email,
         subject,
@@ -1788,7 +1905,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #333;">Message from VeriHealth Admin</h2>
             <div style="padding: 20px; background: #f5f5f5; border-radius: 8px;">
-              ${message.replace(/\n/g, '<br>')}
+              ${sanitizedMessage}
             </div>
             <p style="color: #666; font-size: 12px; margin-top: 20px;">
               This message was sent from the VeriHealth administration team.
@@ -1835,7 +1952,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Generate token
-      const token = require('crypto').randomBytes(32).toString('hex');
+      const token = crypto.randomBytes(32).toString('hex');
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiry
 
@@ -2046,7 +2163,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             up?.institution_id ? institutionMap[up.institution_id] : '',
             u.approval_status || '',
             u.created_at,
-          ].map(v => `"${v || ''}"`).join(',');
+          ].map(v => `"${String(v || '').replace(/"/g, '""')}"`).join(',');
         }),
       ];
 
@@ -2061,7 +2178,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Get top performing clinicians (for dashboard widget)
   // Shows top performers within the user's institution only
-  app.get("/api/clinicians/top-performers", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), async (req, res) => {
+  app.get("/api/clinicians/top-performers", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), requireApproved, async (req, res) => {
     try {
       const userId = req.user!.id;
       const userRole = req.user!.role;
@@ -2116,7 +2233,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from('alerts')
         .select('id, responded_by_id, timestamp, responded_at')
         .not('responded_by_id', 'is', null)
-        .not('responded_at', 'is', null);
+        .not('responded_at', 'is', null)
+        .limit(1000);
 
       // Calculate average response time per clinician
       const responseTimesByClinicianId: Record<string, number[]> = {};
@@ -2253,7 +2371,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Update alert with response (when clinician marks alert as read)
   // Clinicians can only respond to alerts for their assigned patients
-  app.patch("/api/alerts/:id/respond", authenticateUser, requireRole('clinician', 'admin'), async (req, res) => {
+  app.patch("/api/alerts/:id/respond", authenticateUser, requireRole('clinician', 'admin'), requireApproved, async (req, res) => {
     try {
       const { id } = req.params;
       const clinicianId = req.user!.id;

@@ -1,14 +1,15 @@
-import { useState } from "react";
-import { useLocation } from "wouter";
+import { useState, useEffect } from "react";
+import { useLocation, useSearch } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Activity, Loader2, UserPlus, Eye, EyeOff } from "lucide-react";
+import { Activity, Loader2, UserPlus, Eye, EyeOff, Mail } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { setAuthToken, setUser } from "@/lib/auth";
 
 export default function Register() {
   const [, setLocation] = useLocation();
+  const search = useSearch();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
   const [email, setEmail] = useState("");
@@ -16,6 +17,24 @@ export default function Register() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  const params = new URLSearchParams(search);
+  const inviteToken = params.get('invite');
+  const [inviteInfo, setInviteInfo] = useState<{ role?: string; email?: string } | null>(null);
+
+  useEffect(() => {
+    if (inviteToken) {
+      fetch(`/api/auth/verify-invite?token=${inviteToken}`)
+        .then(res => res.ok ? res.json() : null)
+        .then(data => {
+          if (data) {
+            setInviteInfo(data);
+            if (data.email) setEmail(data.email);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [inviteToken]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,7 +67,7 @@ export default function Register() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, ...(inviteToken ? { inviteToken } : {}) }),
       });
 
       if (!response.ok) {
@@ -134,7 +153,7 @@ export default function Register() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                disabled={isLoading}
+                disabled={isLoading || !!inviteInfo?.email}
                 data-testid="input-email"
               />
             </div>
@@ -188,10 +207,20 @@ export default function Register() {
             </div>
 
             <div className="bg-blue-50 dark:bg-blue-950/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800">
-              <p className="text-sm text-muted-foreground">
-                New accounts are created as <strong>Patient</strong> accounts. 
-                Contact an administrator if you need healthcare provider access.
-              </p>
+              {inviteInfo ? (
+                <div className="flex items-start gap-2">
+                  <Mail className="h-4 w-4 mt-0.5 text-blue-600 flex-shrink-0" />
+                  <p className="text-sm text-muted-foreground">
+                    You've been invited to join as <strong className="capitalize">{inviteInfo.role?.replace('_', ' ') || 'Patient'}</strong>.
+                    Your role will be set automatically when you register.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  New accounts are created as <strong>Patient</strong> accounts. 
+                  Contact an administrator if you need healthcare provider access.
+                </p>
+              )}
             </div>
 
             <Button 
