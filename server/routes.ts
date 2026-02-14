@@ -283,7 +283,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/auth/verify-invite", async (req, res) => {
+  app.get("/api/auth/verify-invite", authRateLimit, async (req, res) => {
     try {
       const { token } = req.query;
 
@@ -611,7 +611,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/auth/logout", async (req, res) => {
+  app.post("/api/auth/logout", authRateLimit, async (req, res) => {
     try {
       const authHeader = req.headers.authorization;
       const token = authHeader?.substring(7);
