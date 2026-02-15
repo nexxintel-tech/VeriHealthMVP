@@ -39,6 +39,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   const authRateLimit = rateLimit(15 * 60 * 1000, 10);
 
+  app.get("/api/admin/migration-sql", authenticateUser, requireRole('admin'), async (req, res) => {
+    const sql = `
+-- Add missing columns to patients table
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS name text DEFAULT 'Unknown';
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS age integer DEFAULT 0;
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS gender text DEFAULT 'unknown';
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS institution_id varchar REFERENCES institutions(id);
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS assigned_clinician_id varchar REFERENCES users(id);
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS status text DEFAULT 'Active';
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
+
+-- Create sponsor_dependents table
+CREATE TABLE IF NOT EXISTS sponsor_dependents (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  sponsor_id varchar NOT NULL REFERENCES users(id),
+  dependent_patient_id varchar NOT NULL REFERENCES patients(id),
+  status text NOT NULL DEFAULT 'pending',
+  created_at timestamptz DEFAULT now()
+);
+
+-- Create file_attachments table
+CREATE TABLE IF NOT EXISTS file_attachments (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  patient_id varchar NOT NULL REFERENCES patients(id),
+  uploaded_by varchar NOT NULL REFERENCES users(id),
+  file_name text NOT NULL,
+  file_type text NOT NULL,
+  file_size integer NOT NULL,
+  category text NOT NULL DEFAULT 'other',
+  file_data text NOT NULL,
+  created_at timestamptz DEFAULT now()
+);
+
+-- Create alerts table foreign key to patients if missing
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'alerts_patient_id_fkey' AND table_name = 'alerts'
+  ) THEN
+    ALTER TABLE alerts ADD CONSTRAINT alerts_patient_id_fkey 
+      FOREIGN KEY (patient_id) REFERENCES patients(id);
+  END IF;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+    `;
+    res.json({ sql: sql.trim() });
+  });
+
   // Auth endpoints (no authentication required)
   app.post("/api/auth/login", authRateLimit, async (req, res) => {
     try {
@@ -175,6 +223,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         profileData = newProfile;
+
+        if (newProfile.role === 'patient') {
+          const patientName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'Unknown';
+          const { error: patientError } = await supabase
+            .from('patients')
+            .insert({
+              user_id: user.id,
+              name: patientName,
+              age: 0,
+              gender: 'unknown',
+              institution_id: defaultInstitutionId,
+              assigned_clinician_id: null,
+              status: 'Active',
+            });
+
+          if (patientError) {
+            console.error("Error creating patient record for Google auth:", patientError);
+          }
+        }
       }
 
       if (profileData!.role === 'clinician' && existingUser!.approval_status !== 'approved') {
@@ -307,27 +374,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         throw profileInsertError;
       }
 
-      if (role === 'patient' && fullName && age !== undefined && age !== null && age !== '' && gender) {
-        const parsedAge = parseInt(String(age), 10);
-        if (!isNaN(parsedAge) && parsedAge >= 0) {
-          const { error: patientError } = await supabase
-            .from('patients')
-            .insert({
-              user_id: authData.user.id,
-              name: fullName,
-              age: parsedAge,
-              gender,
-              institution_id: targetInstitutionId,
-              assigned_clinician_id: null,
-              status: 'Active',
-            });
+      if (role === 'patient') {
+        const patientName = fullName || email.split('@')[0];
+        const parsedAge = (age !== undefined && age !== null && age !== '') ? parseInt(String(age), 10) : 0;
+        const patientAge = (!isNaN(parsedAge) && parsedAge >= 0) ? parsedAge : 0;
+        const patientGender = gender || 'unknown';
 
-          if (patientError) {
-            await supabase.from('user_profiles').delete().eq('user_id', authData.user.id);
-            await supabase.from('users').delete().eq('id', authData.user.id);
-            await supabase.auth.admin.deleteUser(authData.user.id);
-            throw patientError;
-          }
+        const { error: patientError } = await supabase
+          .from('patients')
+          .insert({
+            user_id: authData.user.id,
+            name: patientName,
+            age: patientAge,
+            gender: patientGender,
+            institution_id: targetInstitutionId,
+            assigned_clinician_id: null,
+            status: 'Active',
+          });
+
+        if (patientError) {
+          await supabase.from('user_profiles').delete().eq('user_id', authData.user.id);
+          await supabase.from('users').delete().eq('id', authData.user.id);
+          await supabase.auth.admin.deleteUser(authData.user.id);
+          throw patientError;
         }
       }
 

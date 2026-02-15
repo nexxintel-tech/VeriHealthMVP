@@ -1,11 +1,11 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, timestamp, boolean, decimal } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, serial, timestamp, boolean, decimal, date, real } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-// Institutions table
 export const institutions = pgTable("institutions", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  id: serial("id").primaryKey(),
+  idUuid: varchar("id_uuid"),
   name: text("name").notNull(),
   address: text("address"),
   contactEmail: text("contact_email"),
@@ -14,78 +14,83 @@ export const institutions = pgTable("institutions", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Users table for authentication
 export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  id: varchar("id").primaryKey(),
   email: text("email").notNull().unique(),
   role: text("role").notNull().default("patient"),
-  institutionId: varchar("institution_id").references(() => institutions.id),
+  institutionId: integer("institution_id"),
+  institutionUuid: varchar("institution_uuid"),
   approvalStatus: text("approval_status"),
+  authUserId: varchar("auth_user_id"),
+  healthDataConsent: boolean("health_data_consent"),
+  femaleHealthConsent: boolean("female_health_consent"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Patients table
 export const patients = pgTable("patients", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").references(() => users.id),
-  assignedClinicianId: varchar("assigned_clinician_id").references(() => users.id),
-  institutionId: varchar("institution_id").references(() => institutions.id),
-  name: text("name").notNull(),
-  age: integer("age").notNull(),
-  gender: text("gender").notNull(),
-  status: text("status").notNull().default("Active"),
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-// Conditions table
-export const conditions = pgTable("conditions", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  patientId: varchar("patient_id").references(() => patients.id).notNull(),
-  name: text("name").notNull(),
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-// Vital readings table
-export const vitalReadings = pgTable("vital_readings", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  patientId: varchar("patient_id").references(() => patients.id).notNull(),
-  type: text("type").notNull(),
-  value: decimal("value").notNull(),
-  unit: text("unit").notNull(),
-  timestamp: timestamp("timestamp").defaultNow(),
-  status: text("status").notNull().default("normal"),
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-// Risk scores table
-export const riskScores = pgTable("risk_scores", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  patientId: varchar("patient_id").references(() => patients.id).notNull(),
-  score: integer("score").notNull(),
-  riskLevel: text("risk_level").notNull(),
-  lastSync: timestamp("last_sync").defaultNow(),
+  userId: varchar("user_id"),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  sex: text("sex"),
+  dateOfBirth: date("date_of_birth"),
+  bloodType: text("blood_type"),
+  heightCm: real("height_cm"),
+  weightKg: real("weight_kg"),
+  phone: text("phone"),
+  address: text("address"),
+  emergencyContactName: text("emergency_contact_name"),
+  emergencyContactPhone: text("emergency_contact_phone"),
+  assignedClinicianId: varchar("assigned_clinician_id"),
+  hospitalId: integer("hospital_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Alerts table
-export const alerts = pgTable("alerts", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  patientId: varchar("patient_id").references(() => patients.id).notNull(),
-  type: text("type").notNull(),
-  message: text("message").notNull(),
-  severity: text("severity").notNull(),
-  isRead: boolean("is_read").notNull().default(false),
-  respondedById: varchar("responded_by_id").references(() => users.id),
-  respondedAt: timestamp("responded_at"),
-  timestamp: timestamp("timestamp").defaultNow(),
+export const conditions = pgTable("conditions", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description"),
+  category: text("category"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Clinician profiles table
+export const vitalReadings = pgTable("vital_readings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id"),
+  type: text("type").notNull(),
+  value: decimal("value").notNull(),
+  recordedAt: timestamp("recorded_at").defaultNow(),
+  source: text("source"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const riskScores = pgTable("risk_scores", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id"),
+  conditionId: integer("condition_id"),
+  score: integer("score").notNull(),
+  level: text("level").notNull(),
+  explanation: text("explanation"),
+  generatedAt: timestamp("generated_at").defaultNow(),
+});
+
+export const alerts = pgTable("alerts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id"),
+  conditionId: integer("condition_id"),
+  alertType: text("alert_type").notNull(),
+  severity: text("severity").notNull(),
+  message: text("message").notNull(),
+  triggeredAt: timestamp("triggered_at").defaultNow(),
+  isResolved: boolean("is_resolved").notNull().default(false),
+  respondedById: varchar("responded_by_id"),
+  respondedAt: timestamp("responded_at"),
+});
+
 export const clinicianProfiles = pgTable("clinician_profiles", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").references(() => users.id).notNull().unique(),
+  userId: varchar("user_id").notNull().unique(),
   fullName: text("full_name").notNull(),
   licenseNumber: text("license_number"),
   specialty: text("specialty"),
@@ -93,10 +98,9 @@ export const clinicianProfiles = pgTable("clinician_profiles", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Activity logs table for admin audit trail
 export const activityLogs = pgTable("activity_logs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").references(() => users.id),
+  userId: varchar("user_id"),
   action: text("action").notNull(),
   targetType: text("target_type").notNull(),
   targetId: varchar("target_id"),
@@ -105,22 +109,20 @@ export const activityLogs = pgTable("activity_logs", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Sponsor-dependent relationships table
 export const sponsorDependents = pgTable("sponsor_dependents", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  sponsorUserId: varchar("sponsor_user_id").references(() => users.id).notNull(),
-  dependentPatientId: varchar("dependent_patient_id").references(() => patients.id).notNull(),
+  sponsorUserId: varchar("sponsor_user_id"),
+  dependentPatientId: varchar("dependent_patient_id"),
   status: text("status").notNull().default("pending"),
   relationship: text("relationship"),
   createdAt: timestamp("created_at").defaultNow(),
   approvedAt: timestamp("approved_at"),
 });
 
-// File attachments table
 export const fileAttachments = pgTable("file_attachments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  patientId: varchar("patient_id").references(() => patients.id).notNull(),
-  uploadedByUserId: varchar("uploaded_by_user_id").references(() => users.id).notNull(),
+  patientId: varchar("patient_id"),
+  uploadedByUserId: varchar("uploaded_by_user_id"),
   fileName: text("file_name").notNull(),
   fileType: text("file_type").notNull(),
   fileSize: integer("file_size").notNull(),
@@ -130,23 +132,30 @@ export const fileAttachments = pgTable("file_attachments", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// User invites table
 export const userInvites = pgTable("user_invites", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   email: text("email").notNull(),
   role: text("role").notNull().default("patient"),
-  institutionId: varchar("institution_id").references(() => institutions.id),
-  invitedById: varchar("invited_by_id").references(() => users.id),
+  institutionId: varchar("institution_id"),
+  invitedById: varchar("invited_by_id"),
   token: text("token").notNull().unique(),
   status: text("status").notNull().default("pending"),
   expiresAt: timestamp("expires_at").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Insert schemas
+export const userProfiles = pgTable("user_profiles", {
+  userId: varchar("user_id").primaryKey(),
+  role: text("role").notNull().default("patient"),
+  institutionId: varchar("institution_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 export const insertPatientSchema = createInsertSchema(patients).omit({
   id: true,
   createdAt: true,
+  updatedAt: true,
 });
 
 export const insertVitalReadingSchema = createInsertSchema(vitalReadings).omit({
@@ -156,7 +165,6 @@ export const insertVitalReadingSchema = createInsertSchema(vitalReadings).omit({
 
 export const insertAlertSchema = createInsertSchema(alerts).omit({
   id: true,
-  createdAt: true,
 });
 
 export const insertInstitutionSchema = createInsertSchema(institutions).omit({
@@ -189,7 +197,6 @@ export const insertFileAttachmentSchema = createInsertSchema(fileAttachments).om
   createdAt: true,
 });
 
-// Types
 export type User = typeof users.$inferSelect;
 export type Patient = typeof patients.$inferSelect;
 export type Condition = typeof conditions.$inferSelect;
@@ -212,3 +219,4 @@ export type SponsorDependent = typeof sponsorDependents.$inferSelect;
 export type InsertSponsorDependent = z.infer<typeof insertSponsorDependentSchema>;
 export type FileAttachment = typeof fileAttachments.$inferSelect;
 export type InsertFileAttachment = z.infer<typeof insertFileAttachmentSchema>;
+export type UserProfile = typeof userProfiles.$inferSelect;
