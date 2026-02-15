@@ -41,48 +41,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/admin/migration-sql", authenticateUser, requireRole('admin'), async (req, res) => {
     const sql = `
--- Add missing columns to patients table
-ALTER TABLE patients ADD COLUMN IF NOT EXISTS name text DEFAULT 'Unknown';
-ALTER TABLE patients ADD COLUMN IF NOT EXISTS age integer DEFAULT 0;
-ALTER TABLE patients ADD COLUMN IF NOT EXISTS gender text DEFAULT 'unknown';
-ALTER TABLE patients ADD COLUMN IF NOT EXISTS institution_id varchar REFERENCES institutions(id);
-ALTER TABLE patients ADD COLUMN IF NOT EXISTS assigned_clinician_id varchar REFERENCES users(id);
-ALTER TABLE patients ADD COLUMN IF NOT EXISTS status text DEFAULT 'Active';
-ALTER TABLE patients ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
-
 -- Create sponsor_dependents table
 CREATE TABLE IF NOT EXISTS sponsor_dependents (
   id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  sponsor_id varchar NOT NULL REFERENCES users(id),
-  dependent_patient_id varchar NOT NULL REFERENCES patients(id),
+  sponsor_user_id varchar REFERENCES users(id),
+  dependent_patient_id varchar REFERENCES patients(id),
   status text NOT NULL DEFAULT 'pending',
-  created_at timestamptz DEFAULT now()
+  relationship text,
+  created_at timestamptz DEFAULT now(),
+  approved_at timestamptz
 );
 
 -- Create file_attachments table
 CREATE TABLE IF NOT EXISTS file_attachments (
   id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  patient_id varchar NOT NULL REFERENCES patients(id),
-  uploaded_by varchar NOT NULL REFERENCES users(id),
+  patient_id varchar REFERENCES patients(id),
+  uploaded_by_user_id varchar REFERENCES users(id),
   file_name text NOT NULL,
   file_type text NOT NULL,
   file_size integer NOT NULL,
-  category text NOT NULL DEFAULT 'other',
+  category text NOT NULL DEFAULT 'general',
+  description text,
   file_data text NOT NULL,
   created_at timestamptz DEFAULT now()
 );
 
--- Create alerts table foreign key to patients if missing
-DO $$ BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.table_constraints 
-    WHERE constraint_name = 'alerts_patient_id_fkey' AND table_name = 'alerts'
-  ) THEN
-    ALTER TABLE alerts ADD CONSTRAINT alerts_patient_id_fkey 
-      FOREIGN KEY (patient_id) REFERENCES patients(id);
-  END IF;
-EXCEPTION WHEN OTHERS THEN NULL;
-END $$;
+-- Create user_invites table
+CREATE TABLE IF NOT EXISTS user_invites (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  email text NOT NULL,
+  role text NOT NULL DEFAULT 'patient',
+  institution_id varchar,
+  invited_by_id varchar REFERENCES users(id),
+  token text NOT NULL UNIQUE,
+  status text NOT NULL DEFAULT 'pending',
+  expires_at timestamptz NOT NULL,
+  created_at timestamptz DEFAULT now()
+);
+
+-- Create activity_logs table
+CREATE TABLE IF NOT EXISTS activity_logs (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  user_id varchar REFERENCES users(id),
+  action text NOT NULL,
+  target_type text NOT NULL,
+  target_id varchar,
+  details text,
+  ip_address text,
+  created_at timestamptz DEFAULT now()
+);
     `;
     res.json({ sql: sql.trim() });
   });
@@ -225,17 +232,19 @@ END $$;
         profileData = newProfile;
 
         if (newProfile.role === 'patient') {
-          const patientName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'Unknown';
+          const fullName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'Unknown';
+          const nameParts = fullName.split(' ');
+          const firstName = nameParts[0] || 'Unknown';
+          const lastName = nameParts.slice(1).join(' ') || '';
           const { error: patientError } = await supabase
             .from('patients')
             .insert({
               user_id: user.id,
-              name: patientName,
-              age: 0,
-              gender: 'unknown',
-              institution_id: defaultInstitutionId,
+              first_name: firstName,
+              last_name: lastName,
+              sex: 'unknown',
+              hospital_id: defaultInstitutionId ? parseInt(String(defaultInstitutionId), 10) || null : null,
               assigned_clinician_id: null,
-              status: 'Active',
             });
 
           if (patientError) {
@@ -375,21 +384,21 @@ END $$;
       }
 
       if (role === 'patient') {
-        const patientName = fullName || email.split('@')[0];
-        const parsedAge = (age !== undefined && age !== null && age !== '') ? parseInt(String(age), 10) : 0;
-        const patientAge = (!isNaN(parsedAge) && parsedAge >= 0) ? parsedAge : 0;
-        const patientGender = gender || 'unknown';
+        const patientFullName = fullName || email.split('@')[0];
+        const nameParts = patientFullName.split(' ');
+        const firstName = nameParts[0] || 'Unknown';
+        const lastName = nameParts.slice(1).join(' ') || '';
+        const patientSex = gender || 'unknown';
 
         const { error: patientError } = await supabase
           .from('patients')
           .insert({
             user_id: authData.user.id,
-            name: patientName,
-            age: patientAge,
-            gender: patientGender,
-            institution_id: targetInstitutionId,
+            first_name: firstName,
+            last_name: lastName,
+            sex: patientSex,
+            hospital_id: targetInstitutionId ? parseInt(String(targetInstitutionId), 10) || null : null,
             assigned_clinician_id: null,
-            status: 'Active',
           });
 
         if (patientError) {
@@ -482,16 +491,13 @@ END $$;
         return res.status(403).json({ error: "Only patients can complete this profile" });
       }
 
-      const { fullName, age, gender, institutionCode } = req.body;
+      const { fullName, age, gender, sex, dateOfBirth, institutionCode } = req.body;
 
-      if (!fullName || age === undefined || age === null || age === '' || !gender) {
-        return res.status(400).json({ error: "Full name, age, and gender are required" });
+      if (!fullName) {
+        return res.status(400).json({ error: "Full name is required" });
       }
 
-      const parsedAge = parseInt(String(age), 10);
-      if (isNaN(parsedAge) || parsedAge < 0 || parsedAge > 150) {
-        return res.status(400).json({ error: "Please provide a valid age" });
-      }
+      const patientSex = sex || gender || 'unknown';
 
       const { data: existingPatient } = await supabase
         .from('patients')
@@ -528,16 +534,20 @@ END $$;
         }
       }
 
+      const nameParts = fullName.split(' ');
+      const firstName = nameParts[0] || 'Unknown';
+      const lastName = nameParts.slice(1).join(' ') || '';
+
       const { data: patient, error: patientError } = await supabase
         .from('patients')
         .insert({
           user_id: userId,
-          name: fullName,
-          age: parsedAge,
-          gender,
-          institution_id: targetInstitutionId,
+          first_name: firstName,
+          last_name: lastName,
+          sex: patientSex,
+          date_of_birth: dateOfBirth || null,
+          hospital_id: targetInstitutionId ? parseInt(String(targetInstitutionId), 10) || null : null,
           assigned_clinician_id: null,
-          status: 'Active',
         })
         .select()
         .single();
@@ -566,14 +576,13 @@ END $$;
 
       let query = supabase
         .from('patients')
-        .select('id, user_id, name, age, gender, status, institution_id, created_at')
+        .select('id, user_id, first_name, last_name, sex, date_of_birth, hospital_id, created_at')
         .is('assigned_clinician_id', null)
-        .eq('status', 'Active')
         .order('created_at', { ascending: true });
 
       if (userRole === 'clinician' || userRole === 'institution_admin') {
         if (userInstitutionId) {
-          query = query.eq('institution_id', userInstitutionId);
+          query = query.eq('hospital_id', userInstitutionId);
         } else {
           return res.json([]);
         }
@@ -586,15 +595,17 @@ END $$;
       const patientsWithInstitution = await Promise.all(
         (patients || []).map(async (patient: any) => {
           let institutionName = null;
-          if (patient.institution_id) {
+          if (patient.hospital_id) {
             const { data: inst } = await supabase
               .from('institutions')
               .select('name')
-              .eq('id', patient.institution_id)
+              .eq('id', patient.hospital_id)
               .single();
             institutionName = inst?.name || null;
           }
-          return { ...patient, institutionName };
+          const name = `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown';
+          const age = patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : 0;
+          return { ...patient, name, age, gender: patient.sex, institutionName };
         })
       );
 
@@ -613,7 +624,7 @@ END $$;
 
       const { data: patient, error: fetchError } = await supabase
         .from('patients')
-        .select('id, assigned_clinician_id, institution_id, name')
+        .select('id, assigned_clinician_id, hospital_id, first_name, last_name')
         .eq('id', id)
         .single();
 
@@ -625,7 +636,7 @@ END $$;
         return res.status(400).json({ error: "This patient is already assigned to a clinician" });
       }
 
-      if (clinicianInstitutionId && patient.institution_id && patient.institution_id !== clinicianInstitutionId) {
+      if (clinicianInstitutionId && patient.hospital_id && String(patient.hospital_id) !== String(clinicianInstitutionId)) {
         return res.status(403).json({ error: "You can only claim patients within your institution" });
       }
 
@@ -642,7 +653,8 @@ END $$;
         return res.status(400).json({ error: "This patient was just claimed by another clinician" });
       }
 
-      res.json({ message: `Patient ${patient.name} has been assigned to you`, patientId: id });
+      const patientName = `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown';
+      res.json({ message: `Patient ${patientName} has been assigned to you`, patientId: id });
     } catch (error: any) {
       console.error("Error claiming patient:", error);
       res.status(500).json({ error: "Failed to claim patient" });
@@ -949,11 +961,9 @@ END $$;
       if (userRole === 'clinician') {
         patientsQuery = patientsQuery.eq('assigned_clinician_id', userId);
       } else if (userRole === 'institution_admin' && userInstitutionId) {
-        patientsQuery = patientsQuery.eq('institution_id', userInstitutionId);
+        patientsQuery = patientsQuery.eq('hospital_id', userInstitutionId);
       }
-      // Admins see all patients (no filter)
 
-      // Apply ordering and execute query
       const { data: patients, error: patientsError } = await patientsQuery.order("created_at", { ascending: false });
 
       if (patientsError) throw patientsError;
@@ -962,47 +972,36 @@ END $$;
         return res.json([]);
       }
 
-      // Fetch risk scores for all patients
-      const patientIds = patients.map(p => p.id);
-      const { data: riskScores } = await supabase
-        .from('risk_scores')
-        .select('patient_id, score, risk_level, last_sync')
-        .in('patient_id', patientIds)
-        .order('updated_at', { ascending: false });
+      const patientUserIds = patients.map(p => p.user_id).filter(Boolean);
+      let latestRiskByUserId: Record<string, any> = {};
+      if (patientUserIds.length > 0) {
+        const { data: riskScores } = await supabase
+          .from('risk_scores')
+          .select('user_id, score, level, generated_at')
+          .in('user_id', patientUserIds)
+          .order('generated_at', { ascending: false });
 
-      // Get latest risk score for each patient
-      const latestRiskByPatient = riskScores?.reduce((acc, rs) => {
-        if (!acc[rs.patient_id]) {
-          acc[rs.patient_id] = rs;
-        }
-        return acc;
-      }, {} as Record<string, any>) || {};
+        latestRiskByUserId = riskScores?.reduce((acc, rs) => {
+          if (!acc[rs.user_id]) {
+            acc[rs.user_id] = rs;
+          }
+          return acc;
+        }, {} as Record<string, any>) || {};
+      }
 
-      // Fetch conditions for each patient
-      const { data: conditions } = await supabase
-        .from('conditions')
-        .select('patient_id, name')
-        .in('patient_id', patientIds);
-
-      // Group conditions by patient
-      const conditionsByPatient = conditions?.reduce((acc, c) => {
-        if (!acc[c.patient_id]) acc[c.patient_id] = [];
-        acc[c.patient_id].push(c.name);
-        return acc;
-      }, {} as Record<string, string[]>) || {};
-
-      // Transform data to match frontend format
-      const transformedPatients = patients.map(patient => ({
-        id: patient.id,
-        name: patient.name || patient.full_name || 'Unknown',
-        age: patient.age || 0,
-        gender: patient.gender || 'N/A',
-        conditions: conditionsByPatient[patient.id] || [],
-        riskScore: latestRiskByPatient[patient.id]?.score || 0,
-        riskLevel: latestRiskByPatient[patient.id]?.risk_level || "low",
-        lastSync: latestRiskByPatient[patient.id]?.last_sync || patient.created_at,
-        status: patient.status || 'Active',
-      }));
+      const transformedPatients = patients.map(patient => {
+        const riskData = patient.user_id ? latestRiskByUserId[patient.user_id] : null;
+        return {
+          id: patient.id,
+          name: `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown',
+          age: patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : 0,
+          gender: patient.sex || 'N/A',
+          conditions: [],
+          riskScore: riskData?.score || 0,
+          riskLevel: riskData?.level || "low",
+          lastSync: riskData?.generated_at || patient.created_at,
+        };
+      });
 
       res.json(transformedPatients);
     } catch (error) {
@@ -1031,36 +1030,30 @@ END $$;
       if (userRole === 'clinician' && patient.assigned_clinician_id !== userId) {
         return res.status(403).json({ error: "Access denied - patient not assigned to you" });
       }
-      if (userRole === 'institution_admin' && userInstitutionId && patient.institution_id !== userInstitutionId) {
+      if (userRole === 'institution_admin' && userInstitutionId && String(patient.hospital_id) !== String(userInstitutionId)) {
         return res.status(403).json({ error: "Access denied - patient not in your institution" });
       }
 
-      // Fetch latest risk score
-      const { data: riskScores } = await supabase
-        .from("risk_scores")
-        .select("score, risk_level, last_sync")
-        .eq("patient_id", id)
-        .order("updated_at", { ascending: false })
-        .limit(1);
-
-      const riskScore = riskScores?.[0];
-
-      // Fetch conditions
-      const { data: conditions } = await supabase
-        .from("conditions")
-        .select("name")
-        .eq("patient_id", id);
+      let riskScore: any = null;
+      if (patient.user_id) {
+        const { data: riskScores } = await supabase
+          .from("risk_scores")
+          .select("score, level, generated_at")
+          .eq("user_id", patient.user_id)
+          .order("generated_at", { ascending: false })
+          .limit(1);
+        riskScore = riskScores?.[0];
+      }
 
       const transformedPatient = {
         id: patient.id,
-        name: patient.name,
-        age: patient.age,
-        gender: patient.gender,
-        conditions: conditions?.map((c: any) => c.name) || [],
+        name: `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown',
+        age: patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : 0,
+        gender: patient.sex || 'N/A',
+        conditions: [],
         riskScore: riskScore?.score || 0,
-        riskLevel: riskScore?.risk_level || "low",
-        lastSync: riskScore?.last_sync || patient.created_at,
-        status: patient.status,
+        riskLevel: riskScore?.level || "low",
+        lastSync: riskScore?.generated_at || patient.created_at,
       };
 
       res.json(transformedPatient);
@@ -1079,26 +1072,30 @@ END $$;
       const userRole = req.user!.role;
       const userInstitutionId = req.user!.institutionId;
 
-      // Verify patient ownership based on role
       const { data: patient } = await supabase
         .from("patients")
-        .select("user_id, assigned_clinician_id, institution_id")
+        .select("user_id, assigned_clinician_id, hospital_id")
         .eq("id", id)
         .single();
 
       if (userRole === 'clinician' && patient?.assigned_clinician_id !== userId) {
         return res.status(403).json({ error: "Access denied - patient not assigned to you" });
       }
-      if (userRole === 'institution_admin' && userInstitutionId && patient?.institution_id !== userInstitutionId) {
+      if (userRole === 'institution_admin' && userInstitutionId && String(patient?.hospital_id) !== String(userInstitutionId)) {
         return res.status(403).json({ error: "Access denied - patient not in your institution" });
+      }
+
+      const patientUserId = patient?.user_id;
+      if (!patientUserId) {
+        return res.status(404).json({ error: "Patient user_id not found" });
       }
 
       let query = supabase
         .from("vital_readings")
         .select("*")
-        .eq("patient_id", id)
-        .gte("timestamp", new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000).toISOString())
-        .order("timestamp", { ascending: false });
+        .eq("user_id", patientUserId)
+        .gte("recorded_at", new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000).toISOString())
+        .order("recorded_at", { ascending: false });
 
       if (type) {
         query = query.eq("type", type);
@@ -1124,50 +1121,53 @@ END $$;
       const userId = req.user!.id;
       const userRole = req.user!.role;
 
-      // First get the patient IDs this user can access
-      let patientIds: string[] = [];
+      let patientUserIds: string[] = [];
       
       if (userRole === 'clinician') {
-        // Clinicians only see alerts for their assigned patients
         const { data: patients } = await supabase
           .from("patients")
-          .select("id")
+          .select("user_id")
           .eq("assigned_clinician_id", userId);
-        patientIds = patients?.map(p => p.id) || [];
+        patientUserIds = patients?.map(p => p.user_id).filter(Boolean) || [];
       }
 
-      // Build the query
       let alertsQuery = supabase
         .from("alerts")
-        .select(`
-          *,
-          patients (name)
-        `)
-        .order("timestamp", { ascending: false })
+        .select("*")
+        .order("triggered_at", { ascending: false })
         .limit(50);
 
-      // Filter by patient IDs for clinician role
-      if (userRole === 'clinician' && patientIds.length > 0) {
-        alertsQuery = alertsQuery.in("patient_id", patientIds);
-      } else if (userRole === 'clinician' && patientIds.length === 0) {
-        // No patients assigned, return empty
+      if (userRole === 'clinician' && patientUserIds.length > 0) {
+        alertsQuery = alertsQuery.in("user_id", patientUserIds);
+      } else if (userRole === 'clinician' && patientUserIds.length === 0) {
         return res.json([]);
       }
-      // Admin sees all alerts (no filter)
 
       const { data: alerts, error } = await alertsQuery;
 
       if (error) throw error;
 
+      const alertUserIds = [...new Set(alerts?.map(a => a.user_id).filter(Boolean) || [])];
+      let patientNamesByUserId: Record<string, string> = {};
+      if (alertUserIds.length > 0) {
+        const { data: patientsForAlerts } = await supabase
+          .from("patients")
+          .select("user_id, first_name, last_name")
+          .in("user_id", alertUserIds);
+        patientsForAlerts?.forEach(p => {
+          patientNamesByUserId[p.user_id] = `${p.first_name || ''} ${p.last_name || ''}`.trim() || 'Unknown';
+        });
+      }
+
       const transformedAlerts = alerts?.map(a => ({
         id: a.id,
-        patientId: a.patient_id,
-        patientName: a.patients?.name || "Unknown",
-        type: a.type,
+        patientId: a.user_id,
+        patientName: patientNamesByUserId[a.user_id] || "Unknown",
+        type: a.alert_type,
         message: a.message,
         severity: a.severity,
-        timestamp: a.timestamp,
-        isRead: a.is_read,
+        timestamp: a.triggered_at,
+        isRead: a.is_resolved,
       }));
 
       res.json(transformedAlerts || []);
@@ -1186,10 +1186,9 @@ END $$;
       const userId = req.user!.id;
       const userRole = req.user!.role;
 
-      // First get the alert and verify access
       const { data: alert, error: alertError } = await supabase
         .from("alerts")
-        .select("*, patient_id")
+        .select("*")
         .eq("id", id)
         .single();
 
@@ -1197,23 +1196,21 @@ END $$;
         return res.status(404).json({ error: "Alert not found" });
       }
 
-      // Verify access based on role (clinicians must own the patient)
       if (userRole === 'clinician') {
         const { data: patient } = await supabase
           .from("patients")
           .select("assigned_clinician_id")
-          .eq("id", alert.patient_id)
+          .eq("user_id", alert.user_id)
           .single();
 
         if (patient?.assigned_clinician_id !== userId) {
           return res.status(403).json({ error: "Access denied - patient not assigned to you" });
         }
       }
-      // Admin can update any alert
 
       const { data, error } = await supabase
         .from("alerts")
-        .update({ is_read: isRead })
+        .update({ is_resolved: isRead })
         .eq("id", id)
         .select()
         .single();
@@ -1267,13 +1264,12 @@ END $$;
           // Get alerts responded to by these clinicians
           const { data: respondedAlerts } = await supabase
             .from('alerts')
-            .select('responded_by_id, timestamp, responded_at')
+            .select('responded_by_id, triggered_at, responded_at')
             .in('responded_by_id', clinicianIds)
             .not('responded_at', 'is', null);
 
-          // Calculate average response time
           const responseTimes = respondedAlerts?.map(a => {
-            return new Date(a.responded_at!).getTime() - new Date(a.timestamp).getTime();
+            return new Date(a.responded_at!).getTime() - new Date(a.triggered_at).getTime();
           }).filter(t => t > 0) || [];
 
           if (responseTimes.length > 0) {
@@ -1305,11 +1301,10 @@ END $$;
       let unassignedQuery = supabase
         .from('patients')
         .select('id', { count: 'exact', head: true })
-        .is('assigned_clinician_id', null)
-        .eq('status', 'Active');
+        .is('assigned_clinician_id', null);
 
       if (userRole === 'clinician' && userInstitutionId) {
-        unassignedQuery = unassignedQuery.eq('institution_id', userInstitutionId);
+        unassignedQuery = unassignedQuery.eq('hospital_id', userInstitutionId);
       }
 
       const { count: unassignedCount } = await unassignedQuery;
@@ -1325,34 +1320,39 @@ END $$;
         });
       }
 
-      // Get risk scores for accessible patients only
-      const { data: allRiskScores } = await supabase
-        .from("risk_scores")
-        .select("patient_id, score, risk_level, updated_at")
-        .in("patient_id", patientIds)
-        .order("updated_at", { ascending: false });
+      const dashPatientUserIds = patients?.map(p => p.user_id).filter(Boolean) || [];
 
-      // Get latest risk score for each patient
-      const latestRiskByPatient = allRiskScores?.reduce((acc, rs) => {
-        if (!acc[rs.patient_id]) {
-          acc[rs.patient_id] = rs;
-        }
-        return acc;
-      }, {} as Record<string, any>) || {};
+      let latestRiskScores: any[] = [];
+      if (dashPatientUserIds.length > 0) {
+        const { data: allRiskScores } = await supabase
+          .from("risk_scores")
+          .select("user_id, score, level, generated_at")
+          .in("user_id", dashPatientUserIds)
+          .order("generated_at", { ascending: false });
 
-      const latestRiskScores = Object.values(latestRiskByPatient);
+        const latestRiskByUser = allRiskScores?.reduce((acc, rs) => {
+          if (!acc[rs.user_id]) {
+            acc[rs.user_id] = rs;
+          }
+          return acc;
+        }, {} as Record<string, any>) || {};
 
-      // Count high risk patients
+        latestRiskScores = Object.values(latestRiskByUser);
+      }
+
       const highRiskCount = latestRiskScores.filter(
-        (rs: any) => rs.risk_level === "high"
+        (rs: any) => rs.level === "high"
       ).length;
 
-      // Get unread alerts for accessible patients only
-      const { count: activeAlerts } = await supabase
-        .from("alerts")
-        .select("*", { count: "exact", head: true })
-        .in("patient_id", patientIds)
-        .eq("is_read", false);
+      let activeAlerts = 0;
+      if (dashPatientUserIds.length > 0) {
+        const { count } = await supabase
+          .from("alerts")
+          .select("*", { count: "exact", head: true })
+          .in("user_id", dashPatientUserIds)
+          .eq("is_resolved", false);
+        activeAlerts = count || 0;
+      }
 
       // Calculate average risk score
       const avgRiskScore = latestRiskScores.length
@@ -1362,7 +1362,7 @@ END $$;
       res.json({
         totalPatients,
         highRiskCount,
-        activeAlerts: activeAlerts || 0,
+        activeAlerts: activeAlerts,
         avgRiskScore,
         unassignedPatients: unassignedCount || 0,
         isClinicianView: false,
@@ -2420,19 +2420,17 @@ END $$;
         return acc;
       }, {} as Record<string, any>) || {};
 
-      // Get alerts with response times (where clinician responded)
       const { data: respondedAlerts } = await supabase
         .from('alerts')
-        .select('id, responded_by_id, timestamp, responded_at')
+        .select('id, responded_by_id, triggered_at, responded_at')
         .not('responded_by_id', 'is', null)
         .not('responded_at', 'is', null)
         .limit(1000);
 
-      // Calculate average response time per clinician
       const responseTimesByClinicianId: Record<string, number[]> = {};
       respondedAlerts?.forEach(alert => {
-        if (alert.responded_by_id && alert.responded_at && alert.timestamp) {
-          const responseTimeMs = new Date(alert.responded_at).getTime() - new Date(alert.timestamp).getTime();
+        if (alert.responded_by_id && alert.responded_at && alert.triggered_at) {
+          const responseTimeMs = new Date(alert.responded_at).getTime() - new Date(alert.triggered_at).getTime();
           if (responseTimeMs > 0) {
             if (!responseTimesByClinicianId[alert.responded_by_id]) {
               responseTimesByClinicianId[alert.responded_by_id] = [];
@@ -2462,21 +2460,31 @@ END $$;
         }
       });
 
-      // Get risk score improvements (patient outcomes)
-      const patientIds = patients?.map(p => p.id) || [];
-      const { data: riskScores } = await supabase
-        .from('risk_scores')
-        .select('patient_id, score, created_at')
-        .in('patient_id', patientIds)
-        .order('created_at', { ascending: true });
+      const tpPatientIds = patients?.map(p => p.id) || [];
+      const tpPatientUserIds = patients?.map(p => p.user_id).filter(Boolean) || [];
+      let riskScoresForTP: any[] = [];
+      if (tpPatientUserIds.length > 0) {
+        const { data } = await supabase
+          .from('risk_scores')
+          .select('user_id, score, generated_at')
+          .in('user_id', tpPatientUserIds)
+          .order('generated_at', { ascending: true });
+        riskScoresForTP = data || [];
+      }
 
-      // Group risk scores by patient and calculate improvement
-      const riskScoresByPatient: Record<string, { score: number; createdAt: string }[]> = {};
-      riskScores?.forEach(rs => {
-        if (!riskScoresByPatient[rs.patient_id]) {
-          riskScoresByPatient[rs.patient_id] = [];
+      const userIdToClinicianId: Record<string, string> = {};
+      patients?.forEach(p => {
+        if (p.user_id && p.assigned_clinician_id) {
+          userIdToClinicianId[p.user_id] = p.assigned_clinician_id;
         }
-        riskScoresByPatient[rs.patient_id].push({ score: rs.score, createdAt: rs.created_at });
+      });
+
+      const riskScoresByPatient: Record<string, { score: number; createdAt: string }[]> = {};
+      riskScoresForTP.forEach(rs => {
+        if (!riskScoresByPatient[rs.user_id]) {
+          riskScoresByPatient[rs.user_id] = [];
+        }
+        riskScoresByPatient[rs.user_id].push({ score: rs.score, createdAt: rs.generated_at });
       });
 
       // Sort each patient's risk scores by timestamp to ensure correct order
@@ -2484,10 +2492,9 @@ END $$;
         scores.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
       });
 
-      // Calculate per-clinician patient outcomes
       const outcomesByClinicianId: Record<string, { total: number; improved: number }> = {};
-      Object.entries(riskScoresByPatient).forEach(([patientId, scores]) => {
-        const clinicianId = clinicianByPatientId[patientId];
+      Object.entries(riskScoresByPatient).forEach(([uId, scores]) => {
+        const clinicianId = userIdToClinicianId[uId];
         if (!clinicianId) return;
         
         if (!outcomesByClinicianId[clinicianId]) {
@@ -2569,10 +2576,9 @@ END $$;
       const clinicianId = req.user!.id;
       const userRole = req.user!.role;
 
-      // First verify the alert exists and check ownership
       const { data: existingAlert, error: fetchError } = await supabase
         .from("alerts")
-        .select("id, responded_by_id, patient_id")
+        .select("id, responded_by_id, user_id")
         .eq("id", id)
         .single();
 
@@ -2580,12 +2586,11 @@ END $$;
         return res.status(404).json({ error: "Alert not found" });
       }
 
-      // Verify clinician owns this patient (admins can respond to any)
       if (userRole === 'clinician') {
         const { data: patient } = await supabase
           .from("patients")
           .select("assigned_clinician_id")
-          .eq("id", existingAlert.patient_id)
+          .eq("user_id", existingAlert.user_id)
           .single();
         
         if (patient?.assigned_clinician_id !== clinicianId) {
@@ -2593,7 +2598,6 @@ END $$;
         }
       }
 
-      // If already responded to, don't overwrite the original responder
       if (existingAlert.responded_by_id) {
         return res.status(400).json({ error: "Alert already responded to" });
       }
@@ -2601,12 +2605,12 @@ END $$;
       const { data, error } = await supabase
         .from("alerts")
         .update({ 
-          is_read: true,
+          is_resolved: true,
           responded_by_id: clinicianId,
           responded_at: new Date().toISOString()
         })
         .eq("id", id)
-        .is("responded_by_id", null) // Only update if not already responded
+        .is("responded_by_id", null)
         .select()
         .single();
 
@@ -2642,44 +2646,34 @@ END $$;
         return res.status(404).json({ error: "Patient profile not found" });
       }
 
-      // Get conditions
-      const { data: conditions } = await supabase
-        .from("conditions")
-        .select("name")
-        .eq("patient_id", patient.id);
+      let riskScore: any = null;
+      if (patient.user_id) {
+        const { data: riskScores } = await supabase
+          .from("risk_scores")
+          .select("score, level, generated_at")
+          .eq("user_id", patient.user_id)
+          .order("generated_at", { ascending: false })
+          .limit(1);
+        riskScore = riskScores?.[0];
+      }
 
-      // Get latest risk score
-      const { data: riskScores } = await supabase
-        .from("risk_scores")
-        .select("score, risk_level, last_sync")
-        .eq("patient_id", patient.id)
-        .order("updated_at", { ascending: false })
-        .limit(1);
-
-      const riskScore = riskScores?.[0];
-
-      // Get recent vitals (last 7 days)
       const { data: rawVitals } = await supabase
         .from("vital_readings")
         .select("*")
-        .eq("patient_id", patient.id)
-        .gte("timestamp", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
-        .order("timestamp", { ascending: false });
+        .eq("user_id", userId)
+        .gte("recorded_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+        .order("recorded_at", { ascending: false });
 
-      // Transform vitals to camelCase for frontend
       const transformVital = (v: any) => ({
         id: v.id,
-        patientId: v.patient_id,
+        patientId: v.user_id,
         type: v.type,
         value: v.value,
-        unit: v.unit,
-        timestamp: v.timestamp,
-        status: v.status,
+        timestamp: v.recorded_at,
       });
 
       const recentVitals = rawVitals?.map(transformVital) || [];
 
-      // Get vital summaries (latest of each type)
       const vitalsByType: Record<string, any> = {};
       recentVitals.forEach(v => {
         if (!vitalsByType[v.type]) {
@@ -2687,7 +2681,6 @@ END $$;
         }
       });
 
-      // Get assigned clinician info
       let clinicianInfo = null;
       if (patient.assigned_clinician_id) {
         const { data: clinician } = await supabase
@@ -2697,7 +2690,6 @@ END $$;
           .single();
 
         if (clinician) {
-          // Get clinician profile
           const { data: profile } = await supabase
             .from("clinician_profiles")
             .select("full_name, specialty, phone")
@@ -2714,13 +2706,12 @@ END $$;
         }
       }
 
-      // Get institution info
       let institutionInfo = null;
-      if (patient.institution_id) {
+      if (patient.hospital_id) {
         const { data: institution } = await supabase
           .from("institutions")
           .select("id, name, address, contact_email, contact_phone")
-          .eq("id", patient.institution_id)
+          .eq("id", patient.hospital_id)
           .single();
 
         if (institution) {
@@ -2734,35 +2725,32 @@ END $$;
         }
       }
 
-      // Get recent alerts for this patient
       const { data: rawAlerts } = await supabase
         .from("alerts")
-        .select("id, type, message, severity, is_read, timestamp")
-        .eq("patient_id", patient.id)
-        .order("timestamp", { ascending: false })
+        .select("id, alert_type, message, severity, is_resolved, triggered_at")
+        .eq("user_id", userId)
+        .order("triggered_at", { ascending: false })
         .limit(5);
 
-      // Transform alerts to camelCase
       const recentAlerts = rawAlerts?.map(a => ({
         id: a.id,
-        type: a.type,
+        type: a.alert_type,
         message: a.message,
         severity: a.severity,
-        isRead: a.is_read,
-        timestamp: a.timestamp,
+        isRead: a.is_resolved,
+        timestamp: a.triggered_at,
       })) || [];
 
       res.json({
         patient: {
           id: patient.id,
-          name: patient.name,
-          age: patient.age,
-          gender: patient.gender,
-          status: patient.status,
-          conditions: conditions?.map(c => c.name) || [],
+          name: `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown',
+          age: patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : 0,
+          gender: patient.sex || 'N/A',
+          conditions: [],
           riskScore: riskScore?.score || 0,
-          riskLevel: riskScore?.risk_level || "low",
-          lastSync: riskScore?.last_sync || patient.created_at,
+          riskLevel: riskScore?.level || "low",
+          lastSync: riskScore?.generated_at || patient.created_at,
         },
         latestVitals: vitalsByType,
         recentVitals: recentVitals,
@@ -2802,9 +2790,9 @@ END $$;
       let query = supabase
         .from("vital_readings")
         .select("*")
-        .eq("patient_id", patient.id)
-        .gte("timestamp", since)
-        .order("timestamp", { ascending: false });
+        .eq("user_id", userId)
+        .gte("recorded_at", since)
+        .order("recorded_at", { ascending: false });
 
       if (type) {
         query = query.eq("type", type);
@@ -2816,12 +2804,10 @@ END $$;
 
       const transformed = (vitals || []).map((v: any) => ({
         id: v.id,
-        patientId: v.patient_id,
+        patientId: v.user_id,
         type: v.type,
         value: v.value,
-        unit: v.unit,
-        timestamp: v.timestamp,
-        status: v.status,
+        timestamp: v.recorded_at,
         createdAt: v.created_at,
       }));
 
@@ -2850,21 +2836,20 @@ END $$;
       const { data: alerts, error: alertsError } = await supabase
         .from("alerts")
         .select("*")
-        .eq("patient_id", patient.id)
-        .order("timestamp", { ascending: false })
+        .eq("user_id", userId)
+        .order("triggered_at", { ascending: false })
         .limit(50);
 
       if (alertsError) throw alertsError;
 
       const transformed = (alerts || []).map((a: any) => ({
         id: a.id,
-        patientId: a.patient_id,
-        type: a.type,
+        patientId: a.user_id,
+        type: a.alert_type,
         message: a.message,
         severity: a.severity,
-        isRead: a.is_read,
-        timestamp: a.timestamp,
-        createdAt: a.created_at,
+        isRead: a.is_resolved,
+        timestamp: a.triggered_at,
       }));
 
       res.json(transformed);
@@ -2889,19 +2874,16 @@ END $$;
         return res.status(404).json({ error: "Patient profile not found" });
       }
 
-      const { data: conditions } = await supabase
-        .from("conditions")
-        .select("name")
-        .eq("patient_id", patient.id);
-
-      const { data: riskScores } = await supabase
-        .from("risk_scores")
-        .select("score, risk_level, last_sync")
-        .eq("patient_id", patient.id)
-        .order("updated_at", { ascending: false })
-        .limit(1);
-
-      const riskScore = riskScores?.[0];
+      let riskScore: any = null;
+      if (patient.user_id) {
+        const { data: riskScores } = await supabase
+          .from("risk_scores")
+          .select("score, level, generated_at")
+          .eq("user_id", patient.user_id)
+          .order("generated_at", { ascending: false })
+          .limit(1);
+        riskScore = riskScores?.[0];
+      }
 
       let clinicianInfo = null;
       if (patient.assigned_clinician_id) {
@@ -2929,11 +2911,11 @@ END $$;
       }
 
       let institutionInfo = null;
-      if (patient.institution_id) {
+      if (patient.hospital_id) {
         const { data: institution } = await supabase
           .from("institutions")
           .select("id, name, address, contact_email, contact_phone")
-          .eq("id", patient.institution_id)
+          .eq("id", patient.hospital_id)
           .single();
 
         if (institution) {
@@ -2951,14 +2933,13 @@ END $$;
         patient: {
           id: patient.id,
           userId: patient.user_id,
-          name: patient.name,
-          age: patient.age,
-          gender: patient.gender,
-          status: patient.status,
-          conditions: conditions?.map((c: any) => c.name) || [],
+          name: `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown',
+          age: patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : 0,
+          gender: patient.sex || 'N/A',
+          conditions: [],
           riskScore: riskScore?.score || 0,
-          riskLevel: riskScore?.risk_level || "low",
-          lastSync: riskScore?.last_sync || patient.created_at,
+          riskLevel: riskScore?.level || "low",
+          lastSync: riskScore?.generated_at || patient.created_at,
         },
         clinician: clinicianInfo,
         institution: institutionInfo,
@@ -2973,7 +2954,7 @@ END $$;
   app.patch("/api/patient/my-profile", authenticateUser, requireRole('patient'), async (req, res) => {
     try {
       const userId = req.user!.id;
-      const { name, age, gender } = req.body;
+      const { name, firstName, lastName, age, gender, sex, dateOfBirth, phone, address, emergencyContactName, emergencyContactPhone, bloodType, heightCm, weightKg } = req.body;
 
       const { data: patient, error: patientError } = await supabase
         .from("patients")
@@ -2988,26 +2969,34 @@ END $$;
       const updates: Record<string, any> = {};
 
       if (name !== undefined) {
-        if (typeof name !== 'string' || name.trim().length === 0) {
-          return res.status(400).json({ error: "Name must be a non-empty string" });
-        }
-        updates.name = name.trim();
+        const nameParts = name.trim().split(' ');
+        updates.first_name = nameParts[0] || '';
+        updates.last_name = nameParts.slice(1).join(' ') || '';
+      }
+      if (firstName !== undefined) {
+        updates.first_name = firstName.trim();
+      }
+      if (lastName !== undefined) {
+        updates.last_name = lastName.trim();
       }
 
-      if (age !== undefined) {
-        const parsedAge = parseInt(String(age), 10);
-        if (isNaN(parsedAge) || parsedAge <= 0 || parsedAge > 150) {
-          return res.status(400).json({ error: "Age must be a valid number between 1 and 150" });
-        }
-        updates.age = parsedAge;
+      if (dateOfBirth !== undefined) {
+        updates.date_of_birth = dateOfBirth;
       }
 
-      if (gender !== undefined) {
-        if (typeof gender !== 'string' || gender.trim().length === 0) {
-          return res.status(400).json({ error: "Gender must be a non-empty string" });
-        }
-        updates.gender = gender.trim();
+      if (sex !== undefined) {
+        updates.sex = sex.trim();
+      } else if (gender !== undefined) {
+        updates.sex = gender.trim();
       }
+
+      if (phone !== undefined) updates.phone = phone;
+      if (address !== undefined) updates.address = address;
+      if (emergencyContactName !== undefined) updates.emergency_contact_name = emergencyContactName;
+      if (emergencyContactPhone !== undefined) updates.emergency_contact_phone = emergencyContactPhone;
+      if (bloodType !== undefined) updates.blood_type = bloodType;
+      if (heightCm !== undefined) updates.height_cm = heightCm;
+      if (weightKg !== undefined) updates.weight_kg = weightKg;
 
       if (Object.keys(updates).length === 0) {
         return res.status(400).json({ error: "No valid fields to update" });
@@ -3026,10 +3015,9 @@ END $$;
         patient: {
           id: updated.id,
           userId: updated.user_id,
-          name: updated.name,
-          age: updated.age,
-          gender: updated.gender,
-          status: updated.status,
+          name: `${updated.first_name || ''} ${updated.last_name || ''}`.trim() || 'Unknown',
+          age: updated.date_of_birth ? Math.floor((Date.now() - new Date(updated.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : 0,
+          gender: updated.sex || 'N/A',
         },
         message: "Profile updated successfully",
       });
@@ -3112,6 +3100,9 @@ END $$;
         createdAt: file.created_at,
       });
     } catch (error: any) {
+      if (error?.code === 'PGRST205' || error?.code === '42P01') {
+        return res.status(503).json({ error: "File storage not yet available" });
+      }
       console.error("Error uploading file:", error);
       res.status(500).json({ error: "Failed to upload file" });
     }
@@ -3183,6 +3174,9 @@ END $$;
 
       res.json(transformed);
     } catch (error: any) {
+      if (error?.code === 'PGRST205' || error?.code === '42P01') {
+        return res.json([]);
+      }
       console.error("Error fetching files:", error);
       res.status(500).json({ error: "Failed to fetch files" });
     }
@@ -3237,6 +3231,9 @@ END $$;
         createdAt: file.created_at,
       });
     } catch (error: any) {
+      if (error?.code === 'PGRST205' || error?.code === '42P01') {
+        return res.status(404).json({ error: "File storage not yet available" });
+      }
       console.error("Error fetching file:", error);
       res.status(500).json({ error: "Failed to fetch file" });
     }
@@ -3271,6 +3268,9 @@ END $$;
 
       res.json({ message: "File deleted successfully" });
     } catch (error: any) {
+      if (error?.code === 'PGRST205' || error?.code === '42P01') {
+        return res.status(404).json({ error: "File storage not yet available" });
+      }
       console.error("Error deleting file:", error);
       res.status(500).json({ error: "Failed to delete file" });
     }
@@ -3286,13 +3286,18 @@ END $$;
         .select("*")
         .eq("sponsor_user_id", userId);
 
-      if (dependentsError) throw dependentsError;
+      if (dependentsError) {
+        if ((dependentsError as any).code === 'PGRST205' || dependentsError.message?.includes('relation') ) {
+          return res.json([]);
+        }
+        throw dependentsError;
+      }
 
       const enriched = await Promise.all(
         (dependents || []).map(async (dep: any) => {
           const { data: patient } = await supabase
             .from("patients")
-            .select("id, name, age, gender, status")
+            .select("id, first_name, last_name, sex, date_of_birth")
             .eq("id", dep.dependent_patient_id)
             .single();
 
@@ -3306,10 +3311,9 @@ END $$;
             approvedAt: dep.approved_at,
             patient: patient ? {
               id: patient.id,
-              name: patient.name,
-              age: patient.age,
-              gender: patient.gender,
-              status: patient.status,
+              name: `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown',
+              age: patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : 0,
+              gender: patient.sex || 'N/A',
             } : null,
           };
         })
@@ -3317,6 +3321,9 @@ END $$;
 
       res.json(enriched);
     } catch (error: any) {
+      if (error?.code === 'PGRST205' || error?.code === '42P01') {
+        return res.json([]);
+      }
       console.error("Error fetching dependents:", error);
       res.status(500).json({ error: "Failed to fetch dependents" });
     }
@@ -3385,6 +3392,9 @@ END $$;
         createdAt: record.created_at,
       });
     } catch (error: any) {
+      if (error?.code === 'PGRST205' || error?.code === '42P01') {
+        return res.status(503).json({ error: "Sponsor feature not yet available" });
+      }
       console.error("Error creating sponsor request:", error);
       res.status(500).json({ error: "Failed to create sponsor request" });
     }
@@ -3438,6 +3448,9 @@ END $$;
 
       res.json(enriched);
     } catch (error: any) {
+      if (error?.code === 'PGRST205' || error?.code === '42P01') {
+        return res.json([]);
+      }
       console.error("Error fetching sponsor requests:", error);
       res.status(500).json({ error: "Failed to fetch sponsor requests" });
     }
@@ -3510,6 +3523,9 @@ END $$;
         message: `Sponsor request ${action === 'approve' ? 'approved' : 'rejected'} successfully`,
       });
     } catch (error: any) {
+      if (error?.code === 'PGRST205' || error?.code === '42P01') {
+        return res.status(503).json({ error: "Sponsor feature not yet available" });
+      }
       console.error("Error updating sponsor request:", error);
       res.status(500).json({ error: "Failed to update sponsor request" });
     }
@@ -3543,35 +3559,31 @@ END $$;
         return res.status(404).json({ error: "Patient not found" });
       }
 
-      const { data: conditions } = await supabase
-        .from("conditions")
-        .select("name")
-        .eq("patient_id", patient.id);
+      let riskScore: any = null;
+      if (patient.user_id) {
+        const { data: riskScoresData } = await supabase
+          .from("risk_scores")
+          .select("score, level, generated_at")
+          .eq("user_id", patient.user_id)
+          .order("generated_at", { ascending: false })
+          .limit(1);
+        riskScore = riskScoresData?.[0];
+      }
 
-      const { data: riskScoresData } = await supabase
-        .from("risk_scores")
-        .select("score, risk_level, last_sync")
-        .eq("patient_id", patient.id)
-        .order("updated_at", { ascending: false })
-        .limit(1);
-
-      const riskScore = riskScoresData?.[0];
-
+      const depPatientUserId = patient.user_id;
       const { data: rawVitals } = await supabase
         .from("vital_readings")
         .select("*")
-        .eq("patient_id", patient.id)
-        .gte("timestamp", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
-        .order("timestamp", { ascending: false });
+        .eq("user_id", depPatientUserId)
+        .gte("recorded_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+        .order("recorded_at", { ascending: false });
 
       const transformVital = (v: any) => ({
         id: v.id,
-        patientId: v.patient_id,
+        patientId: v.user_id,
         type: v.type,
         value: v.value,
-        unit: v.unit,
-        timestamp: v.timestamp,
-        status: v.status,
+        timestamp: v.recorded_at,
       });
 
       const recentVitals = rawVitals?.map(transformVital) || [];
@@ -3609,11 +3621,11 @@ END $$;
       }
 
       let institutionInfo = null;
-      if (patient.institution_id) {
+      if (patient.hospital_id) {
         const { data: institution } = await supabase
           .from("institutions")
           .select("id, name, address, contact_email, contact_phone")
-          .eq("id", patient.institution_id)
+          .eq("id", patient.hospital_id)
           .single();
 
         if (institution) {
@@ -3629,31 +3641,30 @@ END $$;
 
       const { data: rawAlerts } = await supabase
         .from("alerts")
-        .select("id, type, message, severity, is_read, timestamp")
-        .eq("patient_id", patient.id)
-        .order("timestamp", { ascending: false })
+        .select("id, alert_type, message, severity, is_resolved, triggered_at")
+        .eq("user_id", depPatientUserId)
+        .order("triggered_at", { ascending: false })
         .limit(5);
 
       const recentAlerts = rawAlerts?.map((a: any) => ({
         id: a.id,
-        type: a.type,
+        type: a.alert_type,
         message: a.message,
         severity: a.severity,
-        isRead: a.is_read,
-        timestamp: a.timestamp,
+        isRead: a.is_resolved,
+        timestamp: a.triggered_at,
       })) || [];
 
       res.json({
         patient: {
           id: patient.id,
-          name: patient.name,
-          age: patient.age,
-          gender: patient.gender,
-          status: patient.status,
-          conditions: conditions?.map((c: any) => c.name) || [],
+          name: `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown',
+          age: patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : 0,
+          gender: patient.sex || 'N/A',
+          conditions: [],
           riskScore: riskScore?.score || 0,
-          riskLevel: riskScore?.risk_level || "low",
-          lastSync: riskScore?.last_sync || patient.created_at,
+          riskLevel: riskScore?.level || "low",
+          lastSync: riskScore?.generated_at || patient.created_at,
         },
         latestVitals: vitalsByType,
         recentVitals: recentVitals,
@@ -3662,6 +3673,9 @@ END $$;
         recentAlerts: recentAlerts,
       });
     } catch (error: any) {
+      if (error?.code === 'PGRST205' || error?.code === '42P01') {
+        return res.status(404).json({ error: "Dependent data not available" });
+      }
       console.error("Error fetching dependent dashboard:", error);
       res.status(500).json({ error: "Failed to fetch dependent dashboard" });
     }
