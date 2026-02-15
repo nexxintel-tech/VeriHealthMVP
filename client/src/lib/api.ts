@@ -11,17 +11,16 @@ export interface Patient {
   riskScore: number;
   riskLevel: "low" | "medium" | "high";
   lastSync: string;
-  status: "Active" | "Inactive";
 }
 
 export interface VitalReading {
   id: string;
-  patient_id: string;
+  user_id: string;
   type: string;
   value: number;
-  unit: string;
-  timestamp: string;
-  status: "normal" | "warning" | "critical";
+  recorded_at: string;
+  source: string;
+  created_at: string;
 }
 
 export interface Alert {
@@ -188,9 +187,8 @@ export interface PatientVital {
   patientId: string;
   type: string;
   value: number;
-  unit: string;
   timestamp: string;
-  status: "normal" | "warning" | "critical";
+  createdAt: string;
 }
 
 // Patient dashboard data types
@@ -200,7 +198,6 @@ export interface PatientDashboardData {
     name: string;
     age: number;
     gender: string;
-    status: string;
     conditions: string[];
     riskScore: number;
     riskLevel: "low" | "medium" | "high";
@@ -379,8 +376,7 @@ export interface UnassignedPatient {
   name: string;
   age: number;
   gender: string;
-  status: string;
-  institution_id: string | null;
+  hospital_id: string | null;
   created_at: string;
   institutionName: string | null;
 }
@@ -853,7 +849,6 @@ export interface PatientProfile {
     name: string;
     age: number;
     gender: string;
-    status: string;
     conditions: string[];
     riskScore: number;
     riskLevel: "low" | "medium" | "high";

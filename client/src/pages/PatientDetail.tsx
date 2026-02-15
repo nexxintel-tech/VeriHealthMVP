@@ -49,7 +49,7 @@ export default function PatientDetail() {
   const hrData = vitals
     .filter(v => v.type === "Heart Rate")
     .map(v => ({
-      time: format(new Date(v.timestamp), "MMM dd HH:mm"),
+      time: format(new Date(v.recorded_at), "MMM dd HH:mm"),
       value: parseFloat(v.value.toString())
     }))
     .reverse();
@@ -57,7 +57,7 @@ export default function PatientDetail() {
   const hrvData = vitals
     .filter(v => v.type === "HRV")
     .map(v => ({
-      time: format(new Date(v.timestamp), "MMM dd HH:mm"),
+      time: format(new Date(v.recorded_at), "MMM dd HH:mm"),
       value: parseFloat(v.value.toString())
     }))
     .reverse();
@@ -353,10 +353,6 @@ export default function PatientDetail() {
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Gender</span>
                   <span className="font-medium">{patient.gender}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Status</span>
-                  <span className="font-medium">{patient.status}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Conditions</span>

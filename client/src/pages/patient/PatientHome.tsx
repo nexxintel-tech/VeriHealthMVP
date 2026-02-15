@@ -83,15 +83,6 @@ function DependentDashboardView({ dependentPatientId }: { dependentPatientId: st
     }
   };
 
-  const getVitalStatus = (status: string) => {
-    switch (status) {
-      case "normal": return { color: "text-green-600", bg: "bg-green-50", label: "Normal" };
-      case "warning": return { color: "text-amber-600", bg: "bg-amber-50", label: "Needs attention" };
-      case "critical": return { color: "text-red-600", bg: "bg-red-50", label: "Critical" };
-      default: return { color: "text-gray-600", bg: "bg-gray-50", label: "Unknown" };
-    }
-  };
-
   const hrData = recentVitals
     .filter(v => v.type === "Heart Rate")
     .map(v => ({
@@ -114,9 +105,6 @@ function DependentDashboardView({ dependentPatientId }: { dependentPatientId: st
                 <h2 className="text-2xl font-bold" data-testid="text-patient-name">{patient.name}</h2>
                 <div className="flex items-center gap-2 mt-1">
                   <Badge variant="outline" data-testid="text-patient-demographics">{patient.gender}, {patient.age} years</Badge>
-                  <Badge variant={patient.status === "Active" ? "default" : "secondary"} data-testid="text-patient-status">
-                    {patient.status}
-                  </Badge>
                 </div>
               </div>
             </div>
@@ -142,22 +130,18 @@ function DependentDashboardView({ dependentPatientId }: { dependentPatientId: st
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4" data-testid="vitals-grid">
         {Object.entries(latestVitals).slice(0, 4).map(([type, vital]) => {
           const Icon = getVitalIcon(type);
-          const statusInfo = getVitalStatus(vital.status);
           return (
             <Card key={type} className="border-none shadow-sm" data-testid={`card-vital-${type.toLowerCase().replace(/\s+/g, "-")}`}>
               <CardContent className="pt-4">
                 <div className="flex items-center justify-between">
-                  <div className={`p-2 rounded-lg ${statusInfo.bg}`}>
-                    <Icon className={`h-5 w-5 ${statusInfo.color}`} />
+                  <div className="p-2 rounded-lg bg-gray-50">
+                    <Icon className="h-5 w-5 text-primary" />
                   </div>
-                  <Badge variant="outline" className={statusInfo.color}>
-                    {statusInfo.label}
-                  </Badge>
                 </div>
                 <div className="mt-3">
                   <p className="text-sm text-muted-foreground">{type}</p>
                   <p className="text-2xl font-bold">
-                    {vital.value} <span className="text-sm font-normal text-muted-foreground">{vital.unit}</span>
+                    {vital.value}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
                     Last updated: {format(new Date(vital.timestamp), "MMM dd, HH:mm")}

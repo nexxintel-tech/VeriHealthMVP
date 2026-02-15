@@ -20,7 +20,6 @@ import {
 } from "recharts";
 import PatientLayout from "@/components/layout/PatientLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -67,19 +66,6 @@ function getVitalIcon(type: string) {
     case "Sleep": return Moon;
     case "Steps": return Footprints;
     default: return Activity;
-  }
-}
-
-function getStatusBadge(status: string) {
-  switch (status) {
-    case "normal":
-      return <Badge className="bg-green-100 text-green-700 hover:bg-green-100 border-green-200" data-testid="badge-status-normal">Normal</Badge>;
-    case "warning":
-      return <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100 border-amber-200" data-testid="badge-status-warning">Warning</Badge>;
-    case "critical":
-      return <Badge className="bg-red-100 text-red-700 hover:bg-red-100 border-red-200" data-testid="badge-status-critical">Critical</Badge>;
-    default:
-      return <Badge variant="secondary" data-testid="badge-status-unknown">Unknown</Badge>;
   }
 }
 
@@ -246,9 +232,7 @@ export default function PatientVitals() {
                       <tr className="border-b text-left">
                         <th className="pb-3 font-medium text-muted-foreground">Type</th>
                         <th className="pb-3 font-medium text-muted-foreground">Value</th>
-                        <th className="pb-3 font-medium text-muted-foreground">Unit</th>
                         <th className="pb-3 font-medium text-muted-foreground">Timestamp</th>
-                        <th className="pb-3 font-medium text-muted-foreground">Status</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -269,11 +253,9 @@ export default function PatientVitals() {
                             <td className="py-3 font-semibold" data-testid={`text-value-${vital.id || idx}`}>
                               {vital.value}
                             </td>
-                            <td className="py-3 text-muted-foreground">{vital.unit}</td>
                             <td className="py-3 text-muted-foreground" data-testid={`text-timestamp-${vital.id || idx}`}>
                               {format(new Date(vital.timestamp), "MMM dd, yyyy HH:mm")}
                             </td>
-                            <td className="py-3">{getStatusBadge(vital.status)}</td>
                           </tr>
                         );
                       })}

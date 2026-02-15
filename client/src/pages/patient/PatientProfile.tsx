@@ -257,15 +257,6 @@ export default function PatientProfile() {
                   <p className="text-sm text-muted-foreground">Gender</p>
                   <p className="font-medium" data-testid="text-patient-gender">{patient?.gender}</p>
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Status</p>
-                  <Badge
-                    variant={patient?.status === "Active" ? "default" : "secondary"}
-                    data-testid="badge-patient-status"
-                  >
-                    {patient?.status}
-                  </Badge>
-                </div>
                 <div className="sm:col-span-2">
                   <p className="text-sm text-muted-foreground">Conditions</p>
                   <div className="flex flex-wrap gap-2 mt-1" data-testid="list-conditions">

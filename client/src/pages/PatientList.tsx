@@ -42,7 +42,6 @@ export default function PatientList() {
     name: p.name || 'Unknown',
     conditions: Array.isArray(p.conditions) ? p.conditions.filter(Boolean) : [],
     gender: p.gender || 'N/A',
-    status: p.status || 'Inactive',
     riskScore: p.riskScore ?? 0,
     riskLevel: p.riskLevel || 'low',
     lastSync: p.lastSync || new Date().toISOString(),
@@ -95,7 +94,6 @@ export default function PatientList() {
                 <TableHeader className="bg-secondary/50">
                   <TableRow>
                     <TableHead className="w-[250px]">Patient Name</TableHead>
-                    <TableHead>Status</TableHead>
                     <TableHead>Main Condition</TableHead>
                     <TableHead className="cursor-pointer hover:text-foreground">
                       <div className="flex items-center gap-1">
@@ -123,7 +121,7 @@ export default function PatientList() {
                     ))
                   ) : filteredPatients.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                         {searchTerm ? "No patients match your search" : "No patients found"}
                       </TableCell>
                     </TableRow>
@@ -143,12 +141,6 @@ export default function PatientList() {
                               </Link>
                               <span className="text-xs text-muted-foreground">{patient.age} yrs • {patient.gender}</span>
                             </div>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <div className={`h-2 w-2 rounded-full ${patient.status === 'Active' ? 'bg-green-500' : 'bg-gray-300'}`} />
-                            <span className="text-sm text-muted-foreground">{patient.status}</span>
                           </div>
                         </TableCell>
                         <TableCell>{patient.conditions[0] || "None"}</TableCell>
