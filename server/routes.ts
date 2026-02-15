@@ -239,11 +239,12 @@ CREATE TABLE IF NOT EXISTS activity_logs (
           const { error: patientError } = await supabase
             .from('patients')
             .insert({
+              id: crypto.randomUUID(),
               user_id: user.id,
               first_name: firstName,
               last_name: lastName,
               sex: 'unknown',
-              hospital_id: defaultInstitutionId ? parseInt(String(defaultInstitutionId), 10) || null : null,
+              hospital_id: defaultInstitutionId || null,
               assigned_clinician_id: null,
             });
 
@@ -393,11 +394,12 @@ CREATE TABLE IF NOT EXISTS activity_logs (
         const { error: patientError } = await supabase
           .from('patients')
           .insert({
+            id: crypto.randomUUID(),
             user_id: authData.user.id,
             first_name: firstName,
             last_name: lastName,
-            sex: patientSex,
-            hospital_id: targetInstitutionId ? parseInt(String(targetInstitutionId), 10) || null : null,
+            sex: (patientSex || 'unknown').toLowerCase(),
+            hospital_id: targetInstitutionId || null,
             assigned_clinician_id: null,
           });
 
@@ -541,12 +543,13 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       const { data: patient, error: patientError } = await supabase
         .from('patients')
         .insert({
+          id: crypto.randomUUID(),
           user_id: userId,
           first_name: firstName,
           last_name: lastName,
-          sex: patientSex,
+          sex: (patientSex || 'unknown').toLowerCase(),
           date_of_birth: dateOfBirth || null,
-          hospital_id: targetInstitutionId ? parseInt(String(targetInstitutionId), 10) || null : null,
+          hospital_id: targetInstitutionId || null,
           assigned_clinician_id: null,
         })
         .select()
@@ -1147,7 +1150,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
 
       if (error) throw error;
 
-      const alertUserIds = [...new Set(alerts?.map(a => a.user_id).filter(Boolean) || [])];
+      const alertUserIds = Array.from(new Set(alerts?.map(a => a.user_id).filter(Boolean) || []));
       let patientNamesByUserId: Record<string, string> = {};
       if (alertUserIds.length > 0) {
         const { data: patientsForAlerts } = await supabase
@@ -1288,7 +1291,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
         });
       }
 
-      let patientsQuery = supabase.from("patients").select("id");
+      let patientsQuery = supabase.from("patients").select("id, user_id");
       
       if (userRole === 'clinician') {
         patientsQuery = patientsQuery.eq('assigned_clinician_id', userId);
@@ -2449,7 +2452,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       // Get patients with their assigned clinician to calculate per-clinician outcomes
       const { data: patients } = await supabase
         .from('patients')
-        .select('id, assigned_clinician_id')
+        .select('id, user_id, assigned_clinician_id')
         .in('assigned_clinician_id', clinicianIds);
 
       // Map patient IDs to their assigned clinician
@@ -2985,9 +2988,9 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       }
 
       if (sex !== undefined) {
-        updates.sex = sex.trim();
+        updates.sex = sex.trim().toLowerCase();
       } else if (gender !== undefined) {
-        updates.sex = gender.trim();
+        updates.sex = gender.trim().toLowerCase();
       }
 
       if (phone !== undefined) updates.phone = phone;

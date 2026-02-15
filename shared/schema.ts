@@ -4,7 +4,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 export const institutions = pgTable("institutions", {
-  id: serial("id").primaryKey(),
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   idUuid: varchar("id_uuid"),
   name: text("name").notNull(),
   address: text("address"),
@@ -18,7 +18,7 @@ export const users = pgTable("users", {
   id: varchar("id").primaryKey(),
   email: text("email").notNull().unique(),
   role: text("role").notNull().default("patient"),
-  institutionId: integer("institution_id"),
+  institutionId: varchar("institution_id"),
   institutionUuid: varchar("institution_uuid"),
   approvalStatus: text("approval_status"),
   authUserId: varchar("auth_user_id"),
@@ -42,7 +42,7 @@ export const patients = pgTable("patients", {
   emergencyContactName: text("emergency_contact_name"),
   emergencyContactPhone: text("emergency_contact_phone"),
   assignedClinicianId: varchar("assigned_clinician_id"),
-  hospitalId: integer("hospital_id"),
+  hospitalId: varchar("hospital_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -56,31 +56,31 @@ export const conditions = pgTable("conditions", {
 });
 
 export const vitalReadings = pgTable("vital_readings", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  id: serial("id").primaryKey(),
   userId: varchar("user_id"),
   type: text("type").notNull(),
   value: decimal("value").notNull(),
   recordedAt: timestamp("recorded_at").defaultNow(),
-  source: text("source"),
+  source: text("source").default("mobile-sync"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
 export const riskScores = pgTable("risk_scores", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  id: serial("id").primaryKey(),
   userId: varchar("user_id"),
   conditionId: integer("condition_id"),
-  score: integer("score").notNull(),
+  score: decimal("score"),
   level: text("level").notNull(),
   explanation: text("explanation"),
   generatedAt: timestamp("generated_at").defaultNow(),
 });
 
 export const alerts = pgTable("alerts", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  id: serial("id").primaryKey(),
   userId: varchar("user_id"),
   conditionId: integer("condition_id"),
   alertType: text("alert_type").notNull(),
-  severity: text("severity").notNull(),
+  severity: text("severity"),
   message: text("message").notNull(),
   triggeredAt: timestamp("triggered_at").defaultNow(),
   isResolved: boolean("is_resolved").notNull().default(false),
