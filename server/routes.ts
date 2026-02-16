@@ -2777,16 +2777,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       const userId = req.user!.id;
       const type = req.query.type as string | undefined;
       const days = parseInt(req.query.days as string) || 30;
-
-      const { data: patient, error: patientError } = await supabase
-        .from("patients")
-        .select("*")
-        .eq("user_id", userId)
-        .single();
-
-      if (patientError || !patient) {
-        return res.status(404).json({ error: "Patient profile not found" });
-      }
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
 
       const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
@@ -2795,7 +2786,9 @@ CREATE TABLE IF NOT EXISTS activity_logs (
         .select("*")
         .eq("user_id", userId)
         .gte("recorded_at", since)
-        .order("recorded_at", { ascending: false });
+        .order("recorded_at", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false })
+        .limit(limit);
 
       if (type) {
         query = query.eq("type", type);
