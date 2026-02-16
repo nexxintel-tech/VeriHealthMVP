@@ -28,7 +28,7 @@ export const users = pgTable("users", {
 });
 
 export const patients = pgTable("patients", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  id: varchar("id").primaryKey(),
   userId: varchar("user_id"),
   firstName: text("first_name"),
   lastName: text("last_name"),
