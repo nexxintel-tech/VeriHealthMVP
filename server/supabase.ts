@@ -7,6 +7,7 @@ if (!supabaseUrl || !supabaseServiceRoleKey) {
   throw new Error('Missing Supabase environment variables');
 }
 
+
 export const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
   auth: {
     autoRefreshToken: false,
