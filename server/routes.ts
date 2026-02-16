@@ -5,6 +5,33 @@ import { supabase } from "./supabase";
 import { authenticateUser, requireRole, requireApproved } from "./middleware/auth";
 import { sendEmail, generateConfirmationEmail, generatePasswordResetEmail } from "./email";
 
+const HEALTH_TYPE_MAP: Record<string, string> = {
+  heart_rate: "Heart Rate",
+  blood_pressure_systolic: "Blood Pressure Systolic",
+  blood_pressure_diastolic: "Blood Pressure Diastolic",
+  spo2: "SpO2",
+  temperature: "Temperature",
+  weight: "Weight",
+  steps: "Steps",
+  sleep: "Sleep",
+  hrv: "HRV",
+  respiratory_rate: "Respiratory Rate",
+  blood_glucose: "Blood Glucose",
+  bmi: "BMI",
+};
+
+const DISPLAY_TO_HEALTH_TYPE: Record<string, string> = Object.fromEntries(
+  Object.entries(HEALTH_TYPE_MAP).map(([k, v]) => [v, k])
+);
+
+function toDisplayType(healthType: string): string {
+  return HEALTH_TYPE_MAP[healthType] || healthType;
+}
+
+function toHealthType(displayType: string): string {
+  return DISPLAY_TO_HEALTH_TYPE[displayType] || displayType;
+}
+
 const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
 
 function rateLimit(windowMs: number, maxRequests: number) {
@@ -1094,21 +1121,27 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       }
 
       let query = supabase
-        .from("vital_readings")
+        .from("health_readings")
         .select("*")
         .eq("user_id", patientUserId)
         .gte("recorded_at", new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000).toISOString())
         .order("recorded_at", { ascending: false });
 
       if (type) {
-        query = query.eq("type", type);
+        const healthType = toHealthType(type as string);
+        query = query.eq("type", healthType);
       }
 
       const { data: vitals, error } = await query;
 
       if (error) throw error;
 
-      res.json(vitals || []);
+      const transformed = (vitals || []).map((v: any) => ({
+        ...v,
+        type: toDisplayType(v.type),
+      }));
+
+      res.json(transformed);
     } catch (error) {
       console.error("Error fetching vitals:", error);
       res.status(500).json({ error: "Failed to fetch vitals" });
@@ -2661,7 +2694,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       }
 
       const { data: rawVitals } = await supabase
-        .from("vital_readings")
+        .from("health_readings")
         .select("*")
         .eq("user_id", userId)
         .gte("recorded_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
@@ -2670,7 +2703,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       const transformVital = (v: any) => ({
         id: v.id,
         patientId: v.user_id,
-        type: v.type,
+        type: toDisplayType(v.type),
         value: v.value,
         timestamp: v.recorded_at,
       });
@@ -2781,14 +2814,15 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
       let query = supabase
-        .from("vital_readings")
+        .from("health_readings")
         .select("*")
         .eq("user_id", userId)
         .gte("recorded_at", since)
         .order("recorded_at", { ascending: false });
 
       if (type) {
-        query = query.eq("type", type);
+        const healthType = toHealthType(type);
+        query = query.eq("type", healthType);
       }
 
       const { data: vitals, error: vitalsError } = await query;
@@ -2798,7 +2832,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       const transformed = (vitals || []).map((v: any) => ({
         id: v.id,
         patientId: v.user_id,
-        type: v.type,
+        type: toDisplayType(v.type),
         value: v.value,
         timestamp: v.recorded_at,
         createdAt: v.created_at,
@@ -2877,8 +2911,8 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       }
 
       const { data: inserted, error: insertError } = await supabase
-        .from("vital_readings")
-        .insert(rows)
+        .from("health_readings")
+        .insert(rows.map(r => ({ ...r, type: toHealthType(r.type) })))
         .select("id, type, value, recorded_at, source");
 
       if (insertError) throw insertError;
@@ -3650,7 +3684,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
 
       const depPatientUserId = patient.user_id;
       const { data: rawVitals } = await supabase
-        .from("vital_readings")
+        .from("health_readings")
         .select("*")
         .eq("user_id", depPatientUserId)
         .gte("recorded_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
@@ -3659,7 +3693,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       const transformVital = (v: any) => ({
         id: v.id,
         patientId: v.user_id,
-        type: v.type,
+        type: toDisplayType(v.type),
         value: v.value,
         timestamp: v.recorded_at,
       });
