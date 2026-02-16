@@ -2821,6 +2821,91 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
+  // POST /api/vitals/ingest - Submit vital readings from patient app or manual entry
+  app.post("/api/vitals/ingest", authenticateUser, requireRole('patient'), async (req, res) => {
+    try {
+      const userId = req.user!.id;
+
+      const { data: patient, error: patientError } = await supabase
+        .from("patients")
+        .select("id")
+        .eq("user_id", userId)
+        .single();
+
+      if (patientError || !patient) {
+        return res.status(404).json({ error: "Patient profile not found" });
+      }
+
+      const { readings } = req.body;
+
+      if (!readings || !Array.isArray(readings) || readings.length === 0) {
+        return res.status(400).json({ error: "readings array is required and must not be empty" });
+      }
+
+      if (readings.length > 100) {
+        return res.status(400).json({ error: "Maximum 100 readings per request" });
+      }
+
+      const validTypes = [
+        "Heart Rate", "Blood Pressure Systolic", "Blood Pressure Diastolic",
+        "SpO2", "Temperature", "Weight", "Steps", "Sleep", "HRV",
+        "Respiratory Rate", "Blood Glucose", "BMI"
+      ];
+
+      const rows: any[] = [];
+      const errors: string[] = [];
+
+      for (let i = 0; i < readings.length; i++) {
+        const r = readings[i];
+
+        if (!r.type || typeof r.type !== "string") {
+          errors.push(`Reading ${i}: type is required`);
+          continue;
+        }
+        if (!validTypes.includes(r.type)) {
+          errors.push(`Reading ${i}: invalid type "${r.type}". Valid types: ${validTypes.join(", ")}`);
+          continue;
+        }
+
+        const value = Number(r.value);
+        if (isNaN(value) || value < 0) {
+          errors.push(`Reading ${i}: value must be a non-negative number`);
+          continue;
+        }
+
+        rows.push({
+          user_id: userId,
+          type: r.type,
+          value: value,
+          recorded_at: r.recorded_at || new Date().toISOString(),
+          source: r.source || "manual",
+        });
+      }
+
+      if (rows.length === 0) {
+        return res.status(400).json({ error: "No valid readings to insert", details: errors });
+      }
+
+      const { data: inserted, error: insertError } = await supabase
+        .from("vital_readings")
+        .insert(rows)
+        .select("id, type, value, recorded_at, source");
+
+      if (insertError) throw insertError;
+
+      res.json({
+        message: `${inserted?.length || 0} reading(s) ingested successfully`,
+        inserted: inserted?.length || 0,
+        rejected: errors.length,
+        details: errors.length > 0 ? errors : undefined,
+        readings: inserted,
+      });
+    } catch (error: any) {
+      console.error("Error ingesting vitals:", error);
+      res.status(500).json({ error: "Failed to ingest vital readings" });
+    }
+  });
+
   // 2. GET /api/patient/my-alerts
   app.get("/api/patient/my-alerts", authenticateUser, requireRole('patient'), async (req, res) => {
     try {
