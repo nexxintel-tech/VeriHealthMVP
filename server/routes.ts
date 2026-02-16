@@ -3759,6 +3759,20 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
+  app.delete("/api/admin/clear-vitals", authenticateUser, requireRole('admin'), async (req: any, res: any) => {
+    try {
+      const { data, error } = await supabase
+        .from("vital_readings")
+        .delete()
+        .neq("id", 0);
+      if (error) throw error;
+      res.json({ success: true, message: "All vital readings cleared" });
+    } catch (error: any) {
+      console.error("Error clearing vitals:", error);
+      res.status(500).json({ error: error.message || "Failed to clear vitals" });
+    }
+  });
+
   const httpServer = createServer(app);
 
   return httpServer;
