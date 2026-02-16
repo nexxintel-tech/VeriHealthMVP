@@ -64,8 +64,15 @@ The VeriHealth platform consists of two separate web applications:
 **API Design**
 - RESTful API endpoints under `/api` prefix
 - Routes handle patient lists, individual patient details, vital readings, and alerts
+- `POST /api/vitals/ingest` - Authenticated endpoint for patients to submit vital readings (manual or from mobile app)
+  - Accepts `{ readings: [{ type, value, recorded_at?, source? }] }` with batch limit of 100
+  - Valid types: Heart Rate, Blood Pressure Systolic/Diastolic, SpO2, Temperature, Weight, Steps, Sleep, HRV, Respiratory Rate, Blood Glucose, BMI
+  - Validates types against whitelist, numeric values, derives user_id from auth token (no impersonation)
+  - Stores to Supabase `vital_readings` table with source default "manual"
 - Response format: JSON with proper HTTP status codes
 - Error handling: Centralized error logging with detailed error responses
+- Database: All operations use Supabase client directly (no Drizzle ORM queries, no Replit built-in DB)
+- `shared/schema.ts` uses Drizzle ORM + drizzle-zod for TypeScript type definitions only (not for DB queries)
 
 **Real-time Updates**
 - Polling-based approach (30-second intervals) as fallback
