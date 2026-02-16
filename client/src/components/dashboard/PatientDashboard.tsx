@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { format } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
 import { 
   HeartPulse, 
   Activity, 
@@ -10,10 +10,12 @@ import {
   Building2,
   Phone,
   Mail,
-  TrendingUp,
-  TrendingDown,
+  Thermometer,
+  Scale,
   AlertCircle,
-  CheckCircle
+  CheckCircle,
+  RefreshCw,
+  Clock,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -31,9 +33,10 @@ import {
 } from "recharts";
 
 export function PatientDashboard() {
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, dataUpdatedAt, refetch, isFetching } = useQuery({
     queryKey: ["patient-dashboard"],
     queryFn: fetchPatientDashboard,
+    refetchInterval: 30000,
   });
 
   if (isLoading) {
@@ -70,10 +73,13 @@ export function PatientDashboard() {
     switch (type) {
       case "Heart Rate": return HeartPulse;
       case "HRV": return Activity;
-      case "Blood Pressure": return Droplets;
+      case "Blood Pressure Systolic":
+      case "Blood Pressure Diastolic": return Droplets;
       case "SpO2": return Droplets;
+      case "Temperature": return Thermometer;
       case "Sleep": return Moon;
       case "Steps": return Footprints;
+      case "Weight": return Scale;
       default: return Activity;
     }
   };
@@ -122,8 +128,31 @@ export function PatientDashboard() {
         </CardContent>
       </Card>
 
+      <div className="flex items-center justify-between text-sm text-muted-foreground bg-muted/30 rounded-lg px-4 py-2">
+        <div className="flex items-center gap-2">
+          <Clock className="h-4 w-4" />
+          <span>Live data from your connected devices</span>
+        </div>
+        <div className="flex items-center gap-3">
+          {dataUpdatedAt > 0 && (
+            <span className="text-xs">
+              Refreshed: {format(new Date(dataUpdatedAt), "HH:mm:ss")}
+            </span>
+          )}
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="inline-flex items-center gap-1 text-xs hover:text-primary transition-colors disabled:opacity-50"
+            data-testid="button-refresh-dashboard"
+          >
+            <RefreshCw className={`h-3 w-3 ${isFetching ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        </div>
+      </div>
+
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {Object.entries(latestVitals).slice(0, 4).map(([type, vital]) => {
+        {Object.entries(latestVitals).slice(0, 8).map(([type, vital]) => {
           const Icon = getVitalIcon(type);
           return (
             <Card key={type} className="border-none shadow-sm">
@@ -139,7 +168,10 @@ export function PatientDashboard() {
                     {vital.value}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Last updated: {format(new Date(vital.timestamp), "MMM dd, HH:mm")}
+                    {format(new Date(vital.timestamp), "MMM dd, HH:mm")}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {formatDistanceToNow(new Date(vital.timestamp), { addSuffix: true })}
                   </p>
                 </div>
               </CardContent>

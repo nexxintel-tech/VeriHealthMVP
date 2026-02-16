@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { format } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
 import {
   HeartPulse,
   Activity,
@@ -8,6 +8,10 @@ import {
   Moon,
   Footprints,
   Filter,
+  Thermometer,
+  Scale,
+  Clock,
+  RefreshCw,
 } from "lucide-react";
 import {
   LineChart,
@@ -35,10 +39,13 @@ const VITAL_TYPES = [
   { value: "all", label: "All", icon: Activity },
   { value: "Heart Rate", label: "Heart Rate", icon: HeartPulse },
   { value: "HRV", label: "HRV", icon: Activity },
-  { value: "Blood Pressure", label: "Blood Pressure", icon: Droplets },
+  { value: "Blood Pressure Systolic", label: "BP Systolic", icon: Droplets },
+  { value: "Blood Pressure Diastolic", label: "BP Diastolic", icon: Droplets },
   { value: "SpO2", label: "SpO2", icon: Droplets },
+  { value: "Temperature", label: "Temperature", icon: Activity },
   { value: "Sleep", label: "Sleep", icon: Moon },
   { value: "Steps", label: "Steps", icon: Footprints },
+  { value: "Weight", label: "Weight", icon: Activity },
 ];
 
 const TIME_PERIODS = [
@@ -51,20 +58,26 @@ const TIME_PERIODS = [
 const CHART_COLORS: Record<string, string> = {
   "Heart Rate": "#ef4444",
   HRV: "#8b5cf6",
-  "Blood Pressure": "#3b82f6",
+  "Blood Pressure Systolic": "#3b82f6",
+  "Blood Pressure Diastolic": "#1d4ed8",
   SpO2: "#06b6d4",
+  Temperature: "#f59e0b",
   Sleep: "#6366f1",
   Steps: "#22c55e",
+  Weight: "#a855f7",
 };
 
 function getVitalIcon(type: string) {
   switch (type) {
     case "Heart Rate": return HeartPulse;
     case "HRV": return Activity;
-    case "Blood Pressure": return Droplets;
+    case "Blood Pressure Systolic":
+    case "Blood Pressure Diastolic": return Droplets;
     case "SpO2": return Droplets;
+    case "Temperature": return Thermometer;
     case "Sleep": return Moon;
     case "Steps": return Footprints;
+    case "Weight": return Scale;
     default: return Activity;
   }
 }
@@ -121,9 +134,10 @@ export default function PatientVitals() {
   const typeParam = selectedType === "all" ? undefined : selectedType;
   const days = parseInt(selectedDays);
 
-  const { data: vitals = [], isLoading, error } = useQuery({
+  const { data: vitals = [], isLoading, error, dataUpdatedAt, refetch, isFetching } = useQuery({
     queryKey: ["patient-vitals", typeParam, days],
     queryFn: () => fetchPatientVitalsOwn(typeParam, days),
+    refetchInterval: 30000,
   });
 
   const chartTypes = useMemo(() => {
@@ -151,7 +165,7 @@ export default function PatientVitals() {
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <Filter className="h-4 w-4 text-muted-foreground hidden sm:block" />
             <Select value={selectedType} onValueChange={setSelectedType}>
               <SelectTrigger className="w-[160px]" data-testid="select-vital-type">
@@ -178,6 +192,17 @@ export default function PatientVitals() {
                 ))}
               </SelectContent>
             </Select>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => refetch()}
+              disabled={isFetching}
+              data-testid="button-refresh-vitals"
+            >
+              <RefreshCw className={`h-4 w-4 mr-1 ${isFetching ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
           </div>
         </div>
 
@@ -215,6 +240,18 @@ export default function PatientVitals() {
 
         {!isLoading && !error && vitals.length > 0 && (
           <>
+            <div className="flex items-center justify-between text-sm text-muted-foreground bg-muted/30 rounded-lg px-4 py-2" data-testid="vitals-sync-info">
+              <div className="flex items-center gap-2">
+                <Clock className="h-4 w-4" />
+                <span>{vitals.length} readings from your connected devices</span>
+              </div>
+              {dataUpdatedAt > 0 && (
+                <span data-testid="text-last-synced">
+                  Last refreshed: {format(new Date(dataUpdatedAt), "MMM dd, HH:mm:ss")}
+                </span>
+              )}
+            </div>
+
             <div className={`grid gap-4 ${chartTypes.length > 1 ? "lg:grid-cols-2" : "grid-cols-1"}`}>
               {chartTypes.map((type) => (
                 <VitalChart key={type} vitals={vitals} type={type} />
@@ -253,8 +290,9 @@ export default function PatientVitals() {
                             <td className="py-3 font-semibold" data-testid={`text-value-${vital.id || idx}`}>
                               {vital.value}
                             </td>
-                            <td className="py-3 text-muted-foreground" data-testid={`text-timestamp-${vital.id || idx}`}>
-                              {format(new Date(vital.timestamp), "MMM dd, yyyy HH:mm")}
+                            <td className="py-3" data-testid={`text-timestamp-${vital.id || idx}`}>
+                              <div className="text-sm">{format(new Date(vital.timestamp), "MMM dd, yyyy HH:mm")}</div>
+                              <div className="text-xs text-muted-foreground">{formatDistanceToNow(new Date(vital.timestamp), { addSuffix: true })}</div>
                             </td>
                           </tr>
                         );
