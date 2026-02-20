@@ -13,14 +13,21 @@ export interface Patient {
   lastSync: string;
 }
 
-export interface VitalReading {
+export interface HealthReading {
   id: string;
   user_id: string;
-  type: string;
-  value: number;
-  recorded_at: string;
   source: string;
+  type: string;
+  value: number | string | null;
+  unit: string | null;
+  recorded_at: string;
   created_at: string;
+  updated_at: string;
+  metadata: Record<string, unknown> | null;
+  start_at: string | null;
+  end_at: string | null;
+  external_id: string | null;
+  value_json: Record<string, unknown> | null;
 }
 
 export interface Alert {
@@ -90,7 +97,7 @@ export async function fetchPatientVitals(
   patientId: string,
   type?: string,
   days: number = 7
-): Promise<VitalReading[]> {
+): Promise<HealthReading[]> {
   const params = new URLSearchParams({ days: days.toString() });
   if (type) params.append("type", type);
   

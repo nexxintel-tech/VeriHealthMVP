@@ -1,11 +1,12 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, serial, timestamp, boolean, decimal, date, real } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, serial, timestamp, boolean, decimal, date, real, uuid, jsonb, numeric } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 export const institutions = pgTable("institutions", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  idUuid: varchar("id_uuid"),
+  id: uuid("id").primaryKey().defaultRandom(),
+  idLegacy: text("id_legacy"),
+  slug: text("slug"),
   name: text("name").notNull(),
   address: text("address"),
   contactEmail: text("contact_email"),
@@ -18,7 +19,7 @@ export const users = pgTable("users", {
   id: varchar("id").primaryKey(),
   email: text("email").notNull().unique(),
   role: text("role").notNull().default("patient"),
-  institutionId: varchar("institution_id"),
+  institutionId: uuid("institution_id"),
   institutionUuid: varchar("institution_uuid"),
   approvalStatus: text("approval_status"),
   authUserId: varchar("auth_user_id"),
@@ -42,7 +43,7 @@ export const patients = pgTable("patients", {
   emergencyContactName: text("emergency_contact_name"),
   emergencyContactPhone: text("emergency_contact_phone"),
   assignedClinicianId: varchar("assigned_clinician_id"),
-  hospitalId: varchar("hospital_id"),
+  hospitalId: uuid("hospital_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -55,14 +56,21 @@ export const conditions = pgTable("conditions", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-export const vitalReadings = pgTable("vital_readings", {
-  id: serial("id").primaryKey(),
-  userId: varchar("user_id"),
+export const healthReadings = pgTable("health_readings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  source: text("source").notNull(),
   type: text("type").notNull(),
-  value: decimal("value").notNull(),
-  recordedAt: timestamp("recorded_at").defaultNow(),
-  source: text("source").default("mobile-sync"),
-  createdAt: timestamp("created_at").defaultNow(),
+  value: numeric("value"),
+  unit: text("unit").notNull(),
+  recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default(sql`'{}'::jsonb`),
+  startAt: timestamp("start_at", { withTimezone: true }),
+  endAt: timestamp("end_at", { withTimezone: true }),
+  externalId: text("external_id"),
+  valueJson: jsonb("value_json").$type<Record<string, unknown> | null>(),
 });
 
 export const riskScores = pgTable("risk_scores", {
@@ -136,7 +144,7 @@ export const userInvites = pgTable("user_invites", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   email: text("email").notNull(),
   role: text("role").notNull().default("patient"),
-  institutionId: varchar("institution_id"),
+  institutionId: uuid("institution_id"),
   invitedById: varchar("invited_by_id"),
   token: text("token").notNull().unique(),
   status: text("status").notNull().default("pending"),
@@ -147,7 +155,7 @@ export const userInvites = pgTable("user_invites", {
 export const userProfiles = pgTable("user_profiles", {
   userId: varchar("user_id").primaryKey(),
   role: text("role").notNull().default("patient"),
-  institutionId: varchar("institution_id"),
+  institutionId: uuid("institution_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -158,9 +166,10 @@ export const insertPatientSchema = createInsertSchema(patients).omit({
   updatedAt: true,
 });
 
-export const insertVitalReadingSchema = createInsertSchema(vitalReadings).omit({
+export const insertHealthReadingSchema = createInsertSchema(healthReadings).omit({
   id: true,
   createdAt: true,
+  updatedAt: true,
 });
 
 export const insertAlertSchema = createInsertSchema(alerts).omit({
@@ -200,14 +209,14 @@ export const insertFileAttachmentSchema = createInsertSchema(fileAttachments).om
 export type User = typeof users.$inferSelect;
 export type Patient = typeof patients.$inferSelect;
 export type Condition = typeof conditions.$inferSelect;
-export type VitalReading = typeof vitalReadings.$inferSelect;
+export type HealthReading = typeof healthReadings.$inferSelect;
 export type RiskScore = typeof riskScores.$inferSelect;
 export type Alert = typeof alerts.$inferSelect;
 export type Institution = typeof institutions.$inferSelect;
 export type ClinicianProfile = typeof clinicianProfiles.$inferSelect;
 
 export type InsertPatient = z.infer<typeof insertPatientSchema>;
-export type InsertVitalReading = z.infer<typeof insertVitalReadingSchema>;
+export type InsertHealthReading = z.infer<typeof insertHealthReadingSchema>;
 export type InsertAlert = z.infer<typeof insertAlertSchema>;
 export type InsertInstitution = z.infer<typeof insertInstitutionSchema>;
 export type InsertClinicianProfile = z.infer<typeof insertClinicianProfileSchema>;

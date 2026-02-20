@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { RiskLevel } from "@/lib/mockData";
+import { RiskLevel } from "@/types/risk";
 
 interface RiskBadgeProps {
   level: RiskLevel;

@@ -59,7 +59,7 @@ The VeriHealth platform consists of two separate web applications:
 - Drizzle ORM for type-safe database queries and migrations
 - Problem: Need real-time capabilities, authentication, and relational data modeling
 - Solution: Supabase provides managed PostgreSQL with real-time subscriptions and auth
-- Schema: Users, Patients, Conditions, VitalReadings, RiskScores, Alerts tables
+- Schema: Users, Patients, Conditions, HealthReadings, RiskScores, Alerts tables
 
 **API Design**
 - RESTful API endpoints under `/api` prefix
@@ -68,7 +68,7 @@ The VeriHealth platform consists of two separate web applications:
   - Accepts `{ readings: [{ type, value, recorded_at?, source? }] }` with batch limit of 100
   - Valid types: Heart Rate, Blood Pressure Systolic/Diastolic, SpO2, Temperature, Weight, Steps, Sleep, HRV, Respiratory Rate, Blood Glucose, BMI
   - Validates types against whitelist, numeric values, derives user_id from auth token (no impersonation)
-  - Stores to Supabase `vital_readings` table with source default "manual"
+  - Stores to Supabase `health_readings` table with source default "manual"
 - Response format: JSON with proper HTTP status codes
 - Error handling: Centralized error logging with detailed error responses
 - Database: All operations use Supabase client directly (no Drizzle ORM queries, no Replit built-in DB)

@@ -32,6 +32,30 @@ function toHealthType(displayType: string): string {
   return DISPLAY_TO_HEALTH_TYPE[displayType] || displayType;
 }
 
+function resolveInstitutionScope(institutionId: string | null | undefined): string | null {
+  if (!institutionId || !institutionId.trim()) {
+    return null;
+  }
+  return institutionId;
+}
+
+function getBase64DecodedSize(base64Input: string): number | null {
+  if (!base64Input || typeof base64Input !== "string") {
+    return null;
+  }
+
+  const base64 = base64Input.replace(/\s/g, "");
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64) || base64.length % 4 !== 0) {
+    return null;
+  }
+
+  try {
+    return Buffer.from(base64, "base64").length;
+  } catch {
+    return null;
+  }
+}
+
 const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
 
 function rateLimit(windowMs: number, maxRequests: number) {
@@ -650,7 +674,11 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     try {
       const { id } = req.params;
       const clinicianId = req.user!.id;
-      const clinicianInstitutionId = req.user!.institutionId;
+      const clinicianInstitutionId = resolveInstitutionScope(req.user!.institutionId);
+
+      if (!clinicianInstitutionId) {
+        return res.status(403).json({ error: "Clinician account is not linked to an institution" });
+      }
 
       const { data: patient, error: fetchError } = await supabase
         .from('patients')
@@ -666,7 +694,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
         return res.status(400).json({ error: "This patient is already assigned to a clinician" });
       }
 
-      if (clinicianInstitutionId && patient.hospital_id && String(patient.hospital_id) !== String(clinicianInstitutionId)) {
+      if (!patient.hospital_id || String(patient.hospital_id) !== String(clinicianInstitutionId)) {
         return res.status(403).json({ error: "You can only claim patients within your institution" });
       }
 
@@ -982,7 +1010,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     try {
       const userId = req.user!.id;
       const userRole = req.user!.role;
-      const userInstitutionId = req.user!.institutionId;
+      const userInstitutionId = resolveInstitutionScope(req.user!.institutionId);
 
       let patientsQuery = supabase
         .from("patients")
@@ -990,7 +1018,10 @@ CREATE TABLE IF NOT EXISTS activity_logs (
 
       if (userRole === 'clinician') {
         patientsQuery = patientsQuery.eq('assigned_clinician_id', userId);
-      } else if (userRole === 'institution_admin' && userInstitutionId) {
+      } else if (userRole === 'institution_admin') {
+        if (!userInstitutionId) {
+          return res.status(403).json({ error: "Institution admin account is not linked to an institution" });
+        }
         patientsQuery = patientsQuery.eq('hospital_id', userInstitutionId);
       }
 
@@ -1046,7 +1077,11 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       const { id } = req.params;
       const userId = req.user!.id;
       const userRole = req.user!.role;
-      const userInstitutionId = req.user!.institutionId;
+      const userInstitutionId = resolveInstitutionScope(req.user!.institutionId);
+
+      if (userRole === 'institution_admin' && !userInstitutionId) {
+        return res.status(403).json({ error: "Institution admin account is not linked to an institution" });
+      }
 
       // Check if user has permission to view this patient
       const { data: patient, error: patientError } = await supabase
@@ -1060,7 +1095,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       if (userRole === 'clinician' && patient.assigned_clinician_id !== userId) {
         return res.status(403).json({ error: "Access denied - patient not assigned to you" });
       }
-      if (userRole === 'institution_admin' && userInstitutionId && String(patient.hospital_id) !== String(userInstitutionId)) {
+      if (userRole === 'institution_admin' && String(patient.hospital_id) !== String(userInstitutionId)) {
         return res.status(403).json({ error: "Access denied - patient not in your institution" });
       }
 
@@ -1100,7 +1135,11 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       const { type, days = 7 } = req.query;
       const userId = req.user!.id;
       const userRole = req.user!.role;
-      const userInstitutionId = req.user!.institutionId;
+      const userInstitutionId = resolveInstitutionScope(req.user!.institutionId);
+
+      if (userRole === 'institution_admin' && !userInstitutionId) {
+        return res.status(403).json({ error: "Institution admin account is not linked to an institution" });
+      }
 
       const { data: patient } = await supabase
         .from("patients")
@@ -1111,7 +1150,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       if (userRole === 'clinician' && patient?.assigned_clinician_id !== userId) {
         return res.status(403).json({ error: "Access denied - patient not assigned to you" });
       }
-      if (userRole === 'institution_admin' && userInstitutionId && String(patient?.hospital_id) !== String(userInstitutionId)) {
+      if (userRole === 'institution_admin' && String(patient?.hospital_id) !== String(userInstitutionId)) {
         return res.status(403).json({ error: "Access denied - patient not in your institution" });
       }
 
@@ -1268,9 +1307,13 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     try {
       const userId = req.user!.id;
       const userRole = req.user!.role;
-      const userInstitutionId = req.user!.institutionId;
+      const userInstitutionId = resolveInstitutionScope(req.user!.institutionId);
 
       if (userRole === 'institution_admin') {
+        if (!userInstitutionId) {
+          return res.status(403).json({ error: "Institution admin account is not linked to an institution" });
+        }
+
         const { data: clinicianProfiles } = await supabase
           .from('user_profiles')
           .select('user_id')
@@ -1341,6 +1384,8 @@ CREATE TABLE IF NOT EXISTS activity_logs (
 
       if (userRole === 'clinician' && userInstitutionId) {
         unassignedQuery = unassignedQuery.eq('hospital_id', userInstitutionId);
+      } else if (userRole === 'clinician') {
+        return res.status(403).json({ error: "Clinician account is not linked to an institution" });
       }
 
       const { count: unassignedCount } = await unassignedQuery;
@@ -2410,14 +2455,17 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     try {
       const userId = req.user!.id;
       const userRole = req.user!.role;
-      const userInstitutionId = req.user!.institutionId;
+      const userInstitutionId = resolveInstitutionScope(req.user!.institutionId);
 
       let tpProfileQuery = supabase
         .from('user_profiles')
         .select('user_id, institution_id')
         .eq('role', 'clinician');
 
-      if (userRole !== 'admin' && userInstitutionId) {
+      if (userRole !== 'admin') {
+        if (!userInstitutionId) {
+          return res.status(403).json({ error: "Account is not linked to an institution" });
+        }
         tpProfileQuery = tpProfileQuery.eq('institution_id', userInstitutionId);
       }
 
@@ -3144,13 +3192,28 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     try {
       const userId = req.user!.id;
       const { patientId, fileName, fileType, fileSize, category, description, fileData } = req.body;
+      const maxFileBytes = 10 * 1024 * 1024;
 
       if (!patientId || !fileName || !fileType || !fileSize || !fileData) {
         return res.status(400).json({ error: "patientId, fileName, fileType, fileSize, and fileData are required" });
       }
 
-      if (fileSize > 10485760) {
-        return res.status(400).json({ error: "File size must not exceed 10MB" });
+      if (typeof fileData !== "string") {
+        return res.status(400).json({ error: "fileData must be a base64 string" });
+      }
+
+      const decodedBytes = getBase64DecodedSize(fileData);
+      if (decodedBytes === null) {
+        return res.status(400).json({ error: "Invalid base64 file data" });
+      }
+
+      if (decodedBytes > maxFileBytes) {
+        return res.status(413).json({ error: "File payload exceeds 10MB limit" });
+      }
+
+      const parsedFileSize = Number(fileSize);
+      if (!Number.isFinite(parsedFileSize) || parsedFileSize <= 0) {
+        return res.status(400).json({ error: "fileSize must be a positive number" });
       }
 
       const validCategories = ['lab_result', 'prescription', 'referral', 'imaging', 'general'];
@@ -3190,7 +3253,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
           uploaded_by_user_id: userId,
           file_name: fileName,
           file_type: fileType,
-          file_size: fileSize,
+          file_size: decodedBytes,
           category: fileCategory,
           description: description || null,
           file_data: fileData,

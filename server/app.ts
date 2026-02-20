@@ -1,4 +1,5 @@
 import { type Server } from "node:http";
+import crypto from "node:crypto";
 
 import express, { type Express, type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
@@ -16,42 +17,60 @@ export function log(message: string, source = "express") {
 
 export const app = express();
 
-declare module 'http' {
+declare module "http" {
   interface IncomingMessage {
-    rawBody: unknown
+    rawBody: unknown;
   }
 }
+
+const REDACTED_KEYS = new Set([
+  "access_token",
+  "refresh_token",
+  "authorization",
+  "cookie",
+  "password",
+]);
+
+function redactForLogs(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(redactForLogs);
+  }
+
+  if (value && typeof value === "object") {
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+      sanitized[key] = REDACTED_KEYS.has(key.toLowerCase())
+        ? "[REDACTED]"
+        : redactForLogs(nestedValue);
+    }
+    return sanitized;
+  }
+
+  return value;
+}
+
 app.use(express.json({
+  limit: "15mb",
   verify: (req, _res, buf) => {
     req.rawBody = buf;
-  }
+  },
 }));
 app.use(express.urlencoded({ extended: false }));
 
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
+  const requestIdHeader = req.headers["x-request-id"];
+  const requestId = typeof requestIdHeader === "string" && requestIdHeader.trim()
+    ? requestIdHeader
+    : crypto.randomUUID();
 
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
+  res.setHeader("x-request-id", requestId);
 
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
-      if (logLine.length > 80) {
-        logLine = logLine.slice(0, 79) + "…";
-      }
-
-      log(logLine);
+      log(`${req.method} ${path} ${res.statusCode} ${duration}ms requestId=${requestId}`);
     }
   });
 
@@ -67,8 +86,16 @@ export default async function runApp(
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
 
+    console.error("[api-error]", JSON.stringify(redactForLogs({
+      status,
+      message,
+      name: err?.name,
+      details: err?.details,
+      code: err?.code,
+    })));
+
     res.status(status).json({ message });
-    throw err;
+    return;
   });
 
   // importantly run the final setup after setting up all the other routes so
@@ -79,7 +106,7 @@ export default async function runApp(
   // Other ports are firewalled. Default to 5000 if not specified.
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || '5000', 10);
+  const port = parseInt(process.env.PORT || "5000", 10);
   server.listen({
     port,
     host: "0.0.0.0",
