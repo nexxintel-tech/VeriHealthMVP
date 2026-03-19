@@ -36,7 +36,7 @@ export default function Home() {
   return (
     <div className="bg-white">
       {/* Hero Slider Section */}
-      
+      <HeroSlider />
 
       {/* Stats Section */}
       <section className="bg-gray-50 py-12 border-y border-gray-200">
