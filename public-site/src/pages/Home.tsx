@@ -1,5 +1,5 @@
 import { Link } from 'wouter';
-import { Activity, Shield, Zap, Clock, ArrowRight } from 'lucide-react';
+import { Activity, Shield, Zap, Clock,} from 'lucide-react';
 
 export default function Home() {
   const features = [
