@@ -89,8 +89,8 @@ function App() {
           <Route path="/contact" component={Contact} />
           <Route path="/portal" component={PortalRedirect} />
           <Route path="/logo-preview" component={LogoPreview} />
-          <Route>
-            {/* 404 - Redirect to home */}
+          
+            <Route path="*">
             <Redirect to="/" />
           </Route>
         </Switch>
