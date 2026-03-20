@@ -10,6 +10,11 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  css: {
+    postcss: {
+      plugins: [],
+    },
+  },
   server: {
     port: 5001,
     host: '0.0.0.0',
@@ -21,3 +26,4 @@ export default defineConfig({
     emptyOutDir: true,
   },
 });
+
