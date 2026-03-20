@@ -90,6 +90,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   const authRateLimit = rateLimit(15 * 60 * 1000, 10);
 
+  app.get("/api/health", (_req, res) => {
+    res.json({ status: "ok" });
+  });
+
   app.get("/api/admin/migration-sql", authenticateUser, requireRole('admin'), async (req, res) => {
     const sql = `
 -- Create sponsor_dependents table

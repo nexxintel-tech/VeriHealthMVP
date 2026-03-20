@@ -3,6 +3,16 @@ import { Resend } from 'resend';
 let connectionSettings: any;
 
 async function getCredentials() {
+  const apiKey = process.env.RESEND_API_KEY;
+  const fromEmail = process.env.RESEND_FROM_EMAIL;
+
+  if (apiKey) {
+    return {
+      apiKey,
+      fromEmail: fromEmail || 'noreply@updates.resend.dev',
+    };
+  }
+
   const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
   const xReplitToken = process.env.REPL_IDENTITY 
     ? 'repl ' + process.env.REPL_IDENTITY 
@@ -29,7 +39,7 @@ async function getCredentials() {
   }
   return {
     apiKey: connectionSettings.settings.api_key, 
-    fromEmail: connectionSettings.settings.from_email
+    fromEmail: connectionSettings.settings.from_email || 'noreply@updates.resend.dev'
   };
 }
 
