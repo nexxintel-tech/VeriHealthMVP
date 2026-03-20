@@ -1,18 +1,16 @@
-# Render Deployment
+# Railway Deployment
 
 This file is for the dashboard app in the repository root. The `public-site` will be deployed separately later.
 
-## Render service
+## Railway service
 
-- Type: `Web Service`
-- Runtime: `Node`
+- Service type: `Service`
+- Builder: `Railpack`
 - Build command: `npm install && npm run build`
 - Start command: `npm run start`
-- Health check path: `/api/health`
+- Healthcheck path: `/api/health`
 
-You can either:
-- create the service in the Render dashboard manually using the values above, or
-- connect the repo and let Render read `render.yaml`
+Railway can use the repo-level `railway.toml` automatically. If it does not, set the config file path to `/railway.toml` in the service settings.
 
 ## Required environment variables
 
@@ -34,14 +32,14 @@ If you do not set the `RESEND_*` values, email sending will not work outside Rep
 
 After the first successful deploy:
 
-1. In Render, open the web service.
+1. In Railway, open the service.
 2. Add the custom domain `app.verihealths.com`.
-3. Copy the DNS record Render gives you.
+3. Copy the DNS record Railway gives you.
 4. In Name.com, create the matching DNS record.
-5. Wait for Render to verify the domain and issue SSL.
+5. Wait for Railway to verify the domain and issue SSL.
 
 ## Notes
 
-- The app listens on `process.env.PORT`, so Render can inject its own port safely.
+- The app listens on `process.env.PORT`, so Railway can inject its own port safely.
 - The client build reads `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` at build time.
 - The server requires `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` at runtime.
