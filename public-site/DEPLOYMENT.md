@@ -31,7 +31,7 @@ Best for clean separation and independent scaling.
 
 **Setup:**
 - Public site → `www.verihealth.com`
-- Dashboard → `app.verihealth.com` or `portal.verihealth.com`
+- Dashboard → `dbs.verihealths.com`
 
 **Advantages:**
 - Clean separation
@@ -60,7 +60,7 @@ cd ../
 vercel --prod
 ```
 
-4. Configure domain: `app.verihealth.com`
+4. Configure domain: `dbs.verihealths.com`
 
 **For Netlify:**
 
@@ -104,7 +104,7 @@ server {
 # Dashboard (app subdomain)
 server {
     listen 80;
-    server_name app.verihealth.com portal.verihealth.com;
+    server_name dbs.verihealths.com;
 
     location / {
         proxy_pass http://localhost:5000;
@@ -164,7 +164,7 @@ aws cloudfront create-invalidation \
 
 **For Dashboard (Dynamic):**
 - Deploy to EC2, ECS, or Lambda
-- Subdomain: `app.verihealth.com`
+- Subdomain: `dbs.verihealths.com`
 
 ## Environment Configuration
 
@@ -206,7 +206,7 @@ VITE_DASHBOARD_URL=http://localhost:5000
 
 **Production (Vercel/Netlify):**
 ```bash
-VITE_DASHBOARD_URL=https://app.verihealth.com
+VITE_DASHBOARD_URL=https://dbs.verihealths.com
 ```
 
 **Deployment Platforms:**
@@ -214,18 +214,18 @@ VITE_DASHBOARD_URL=https://app.verihealth.com
 **Vercel:**
 ```bash
 vercel env add VITE_DASHBOARD_URL production
-# Enter: https://app.verihealth.com
+# Enter: https://dbs.verihealths.com
 ```
 
 **Netlify:**
 In Netlify dashboard:
 - Site Settings → Environment Variables
-- Add: `VITE_DASHBOARD_URL` = `https://app.verihealth.com`
+- Add: `VITE_DASHBOARD_URL` = `https://dbs.verihealths.com`
 
 **CloudFlare Pages:**
 In Pages dashboard:
 - Settings → Environment Variables
-- Production: `VITE_DASHBOARD_URL` = `https://app.verihealth.com`
+- Production: `VITE_DASHBOARD_URL` = `https://dbs.verihealths.com`
 
 **How It Works:**
 
@@ -237,7 +237,7 @@ const DASHBOARD_URL = import.meta.env.VITE_DASHBOARD_URL || window.location.orig
 
 // Redirects
 if (authToken && user?.role === 'clinician') {
-  window.location.href = DASHBOARD_URL + '/';  // → https://app.verihealth.com/
+  window.location.href = DASHBOARD_URL + '/';  // → https://dbs.verihealths.com/
 }
 ```
 
@@ -392,7 +392,7 @@ Use:
 
 Monitor these URLs:
 - `https://www.verihealth.com/`
-- `https://app.verihealth.com/api/health` (if you add health check endpoint)
+- `https://dbs.verihealths.com/api/health` (if you add health check endpoint)
 
 ## SEO Checklist
 

@@ -26,7 +26,7 @@ Edit `.env` and set your dashboard URL:
 VITE_DASHBOARD_URL=http://localhost:5000
 
 # For production
-# VITE_DASHBOARD_URL=https://app.verihealth.com
+# VITE_DASHBOARD_URL=https://dbs.verihealths.com
 ```
 
 ## Step 3: Install Dependencies

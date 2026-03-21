@@ -55,7 +55,7 @@ Edit `.env`:
 VITE_DASHBOARD_URL=http://localhost:5000
 
 # For production with separate subdomain
-# VITE_DASHBOARD_URL=https://app.verihealth.com
+# VITE_DASHBOARD_URL=https://dbs.verihealths.com
 ```
 
 **What happens if not configured:**
@@ -97,7 +97,7 @@ This uses the same localStorage keys as the main dashboard:
 
 ### Option 1: Separate Subdomain (Recommended)
 
-Deploy the public site to `www.verihealth.com` and the dashboard to `app.verihealth.com`:
+Deploy the public site to `www.verihealth.com` and the dashboard to `dbs.verihealths.com`:
 
 **Vercel / Netlify:**
 1. Build the project: `npm run build`

@@ -161,7 +161,7 @@ Visit: `http://localhost:5001`
 
 Edit `.env`:
 ```bash
-VITE_DASHBOARD_URL=https://app.verihealth.com
+VITE_DASHBOARD_URL=https://dbs.verihealths.com
 ```
 
 ### 4. Build
@@ -182,7 +182,7 @@ vercel --prod
 Set environment variable:
 ```bash
 vercel env add VITE_DASHBOARD_URL production
-# Enter: https://app.verihealth.com
+# Enter: https://dbs.verihealths.com
 ```
 
 **Alternative: Netlify**
@@ -199,7 +199,7 @@ Add environment variable in Netlify dashboard.
 
 Point domain to deployment:
 - **Public site**: `www.verihealth.com` or `verihealth.com`
-- **Dashboard**: `app.verihealth.com` (separate deployment)
+- **Dashboard**: `dbs.verihealths.com` (separate deployment)
 
 ## ✨ Key Features Checklist
 
