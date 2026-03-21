@@ -2,14 +2,18 @@
   "name": "rest-express",
   "version": "1.0.0",
   "type": "module",
+  "private": true,
+  "workspaces": [
+    "public-site"
+  ],
   "license": "MIT",
   "scripts": {
     "dev:client": "vite dev --port 5000",
-    "dev:public-site": "npm --prefix public-site run dev -- --host 0.0.0.0 --port 5000",
+    "dev:public-site": "npm run dev --workspace public-site -- --host 0.0.0.0 --port 5000",
     "dev": "cross-env NODE_ENV=development tsx server/index-dev.ts",
-    "build:public-site": "npm --prefix public-site install && npm --prefix public-site run build",
+    "build:public-site": "npm run build --workspace public-site",
     "build": "vite build && esbuild server/index-prod.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/index.js",
-    "start:public-site": "npm --prefix public-site run preview -- --host 0.0.0.0 --port 5000",
+    "start:public-site": "npm run preview --workspace public-site -- --host 0.0.0.0 --port 5000",
     "start": "NODE_ENV=production node dist/index.js",
     "check": "tsc",
     "check:health-readings": "tsx scripts/health-readings-sanity.ts",
