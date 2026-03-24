@@ -138,22 +138,22 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen w-full grid lg:grid-cols-2">
+    <div className="min-h-screen w-full grid lg:grid-cols-2 bg-gradient-to-br from-teal-50 via-white to-indigo-50">
       {/* Left: Form */}
-      <div className="flex items-center justify-center p-8 bg-background">
-        <div className="mx-auto w-full max-w-sm space-y-8">
+      <div className="flex items-center justify-center p-8">
+        <div className="mx-auto w-full max-w-md space-y-8 bg-white/70 dark:bg-black/40 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/40">
           <div className="flex flex-col space-y-2 text-center lg:text-left">
-            <div className="flex items-center justify-center lg:justify-start gap-2 mb-2">
-              <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center text-primary-foreground">
+            <div className="flex items-center justify-center lg:justify-start gap-3 mb-2">
+              <div className="h-10 w-10 rounded-lg bg-gradient-to-tr from-teal-400 to-indigo-600 flex items-center justify-center text-white shadow-md">
                 <Activity className="h-5 w-5" />
               </div>
               <span className="font-heading font-bold text-xl tracking-tight">VeriHealth</span>
             </div>
-            <h1 className="text-3xl font-heading font-bold tracking-tight text-foreground">Welcome back</h1>
-            <p className="text-muted-foreground">Enter your credentials to access the clinician dashboard.</p>
+            <h1 className="text-4xl font-heading font-bold tracking-tight text-foreground">Welcome back</h1>
+            <p className="text-muted-foreground">Sign in to access the clinician dashboard.</p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-5">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
               <Input 
@@ -165,6 +165,7 @@ export default function Login() {
                 required
                 disabled={isLoading}
                 data-testid="input-email"
+                className="rounded-lg h-12 border-transparent shadow-sm"
               />
             </div>
             <div className="space-y-2">
@@ -172,7 +173,7 @@ export default function Login() {
                 <Label htmlFor="password">Password</Label>
                 <a 
                   href="/forgot-password" 
-                  className="text-xs text-primary hover:underline"
+                  className="text-sm text-indigo-600 hover:underline"
                   data-testid="link-forgot-password"
                 >
                   Forgot password?
@@ -187,7 +188,7 @@ export default function Login() {
                   required
                   disabled={isLoading}
                   data-testid="input-password"
-                  className="pr-10"
+                  className="pr-12 rounded-lg h-12 border-transparent shadow-sm"
                 />
                 <button
                   type="button"
@@ -195,12 +196,12 @@ export default function Login() {
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                   data-testid="button-toggle-password"
                 >
-                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
                 </button>
               </div>
             </div>
             <Button 
-              className="w-full h-11 text-base" 
+              className="w-full h-12 text-base bg-gradient-to-r from-teal-400 to-indigo-600 text-white hover:scale-[1.01] transform transition shadow-lg"
               type="submit"
               disabled={isLoading}
               data-testid="button-sign-in"
@@ -343,7 +344,7 @@ export default function Login() {
             </p>
           </div>
 
-          <div className="bg-blue-50 dark:bg-blue-950/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800">
+          <div className="bg-gradient-to-r from-indigo-50 to-teal-50 p-4 rounded-lg border border-indigo-100">
             <h4 className="text-sm font-medium mb-2">Demo Credentials</h4>
             <div className="text-xs text-muted-foreground space-y-1">
               <p><strong>Clinician:</strong> clinician@verihealth.com</p>
@@ -367,23 +368,22 @@ export default function Login() {
       </div>
 
       {/* Right: Visual */}
-      <div className="hidden lg:flex flex-col justify-between p-12 bg-sidebar text-sidebar-foreground relative overflow-hidden">
-        <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&q=80')] bg-cover bg-center opacity-10 mix-blend-overlay"></div>
-        <div className="absolute inset-0 bg-gradient-to-t from-sidebar via-sidebar/80 to-transparent"></div>
-        
+      <div className="hidden lg:flex flex-col justify-between p-12 relative overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-br from-indigo-500 via-teal-400 to-indigo-600 opacity-90 transform -skew-x-6 -translate-x-12"></div>
+        <div className="absolute inset-0 opacity-30 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-white to-transparent"></div>
         <div className="relative z-10">
-          <div className="inline-flex items-center rounded-full border border-sidebar-border bg-sidebar-accent/50 px-3 py-1 text-sm backdrop-blur-sm">
-            <ShieldCheck className="mr-2 h-4 w-4 text-primary" />
+          <div className="inline-flex items-center rounded-full bg-white/20 px-3 py-1 text-sm backdrop-blur-sm border border-white/30">
+            <ShieldCheck className="mr-2 h-4 w-4 text-white" />
             HIPAA Compliant & Secure
           </div>
         </div>
 
-        <div className="relative z-10 space-y-4 max-w-lg">
+        <div className="relative z-10 space-y-4 max-w-lg text-white">
           <blockquote className="space-y-2">
             <p className="text-2xl font-heading font-medium leading-normal">
               "VeriHealth has transformed how we monitor chronic conditions. The real-time risk scoring helps us intervene days before a crisis occurs."
             </p>
-            <footer className="text-sm text-sidebar-foreground/60">
+            <footer className="text-sm text-white/80">
               — Dr. Sarah Chen, Chief of Cardiology
             </footer>
           </blockquote>
