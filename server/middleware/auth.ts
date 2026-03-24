@@ -1,7 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
-import { supabase } from '../supabase';
+import jwt from 'jsonwebtoken';
+import { db } from '../db';
+import { users, userProfiles } from '../../shared/schema';
+import { eq } from 'drizzle-orm';
 
-// Extend Express Request to include user info
+const JWT_SECRET = process.env.JWT_SECRET || 'verihealth-dev-secret-change-in-production';
+
 declare global {
   namespace Express {
     interface Request {
@@ -16,11 +20,24 @@ declare global {
   }
 }
 
-/**
- * Authentication middleware
- * Extracts JWT token from Authorization header and verifies it with Supabase
- * Attaches user info to req.user
- */
+export interface JwtPayload {
+  userId: string;
+  email: string;
+  role: string;
+}
+
+export function signToken(payload: JwtPayload): string {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+}
+
+export function verifyToken(token: string): JwtPayload | null {
+  try {
+    return jwt.verify(token, JWT_SECRET) as JwtPayload;
+  } catch {
+    return null;
+  }
+}
+
 export async function authenticateUser(
   req: Request,
   res: Response,
@@ -28,46 +45,44 @@ export async function authenticateUser(
 ) {
   try {
     const authHeader = req.headers.authorization;
-    
+
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'Missing or invalid authorization header' });
     }
 
-    const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+    const token = authHeader.substring(7);
+    const payload = verifyToken(token);
 
-    // Verify token with Supabase
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-
-    if (authError || !user) {
+    if (!payload) {
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
-    const { data: profileData, error: profileError } = await supabase
-      .from('user_profiles')
-      .select('user_id, role, institution_id')
-      .eq('user_id', user.id)
-      .single();
+    const [userData] = await db
+      .select({ id: users.id, email: users.email, approvalStatus: users.approvalStatus })
+      .from(users)
+      .where(eq(users.id, payload.userId))
+      .limit(1);
 
-    if (profileError || !profileData) {
-      return res.status(403).json({ error: 'User profile not found' });
+    if (!userData) {
+      return res.status(403).json({ error: 'User not found' });
     }
 
-    const { data: userData, error: userError } = await supabase
-      .from('users')
-      .select('id, email, approval_status')
-      .eq('id', user.id)
-      .single();
+    const [profileData] = await db
+      .select({ userId: userProfiles.userId, role: userProfiles.role, institutionId: userProfiles.institutionId })
+      .from(userProfiles)
+      .where(eq(userProfiles.userId, payload.userId))
+      .limit(1);
 
-    if (userError || !userData) {
-      return res.status(403).json({ error: 'User not found in database' });
+    if (!profileData) {
+      return res.status(403).json({ error: 'User profile not found' });
     }
 
     req.user = {
       id: userData.id,
       email: userData.email,
       role: profileData.role as 'patient' | 'clinician' | 'admin' | 'institution_admin',
-      institutionId: profileData.institution_id,
-      approvalStatus: userData.approval_status,
+      institutionId: profileData.institutionId,
+      approvalStatus: userData.approvalStatus,
     };
 
     next();
@@ -77,9 +92,6 @@ export async function authenticateUser(
   }
 }
 
-/**
- * Optional middleware: Only allow specific roles
- */
 export function requireRole(...allowedRoles: Array<'patient' | 'clinician' | 'admin' | 'institution_admin'>) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
@@ -87,10 +99,10 @@ export function requireRole(...allowedRoles: Array<'patient' | 'clinician' | 'ad
     }
 
     if (!allowedRoles.includes(req.user.role)) {
-      return res.status(403).json({ 
+      return res.status(403).json({
         error: 'Insufficient permissions',
         required: allowedRoles,
-        current: req.user.role
+        current: req.user.role,
       });
     }
 
@@ -98,19 +110,15 @@ export function requireRole(...allowedRoles: Array<'patient' | 'clinician' | 'ad
   };
 }
 
-/**
- * Middleware: Require approved status for clinicians
- */
 export function requireApproved(req: Request, res: Response, next: NextFunction) {
   if (!req.user) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  // Only check approval for clinicians
   if (req.user.role === 'clinician' && req.user.approvalStatus !== 'approved') {
-    return res.status(403).json({ 
+    return res.status(403).json({
       error: 'Account pending approval',
-      approvalStatus: req.user.approvalStatus
+      approvalStatus: req.user.approvalStatus,
     });
   }
 

@@ -1,8 +1,15 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import crypto from "crypto";
-import { supabase } from "./supabase";
-import { authenticateUser, requireRole, requireApproved } from "./middleware/auth";
+import bcrypt from "bcryptjs";
+import { db } from "./db";
+import {
+  users, userProfiles, patients, institutions, healthReadings,
+  riskScores, alerts, clinicianProfiles, activityLogs, userInvites,
+  sponsorDependents, fileAttachments,
+} from "../shared/schema";
+import { eq, and, inArray, isNull, desc, asc, gte, lt, ne, count, sql, or } from "drizzle-orm";
+import { authenticateUser, requireRole, requireApproved, signToken } from "./middleware/auth";
 import { sendEmail, generateConfirmationEmail, generatePasswordResetEmail } from "./email";
 
 const HEALTH_TYPE_MAP: Record<string, string> = {
@@ -33,22 +40,14 @@ function toHealthType(displayType: string): string {
 }
 
 function resolveInstitutionScope(institutionId: string | null | undefined): string | null {
-  if (!institutionId || !institutionId.trim()) {
-    return null;
-  }
+  if (!institutionId || !institutionId.trim()) return null;
   return institutionId;
 }
 
 function getBase64DecodedSize(base64Input: string): number | null {
-  if (!base64Input || typeof base64Input !== "string") {
-    return null;
-  }
-
+  if (!base64Input || typeof base64Input !== "string") return null;
   const base64 = base64Input.replace(/\s/g, "");
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64) || base64.length % 4 !== 0) {
-    return null;
-  }
-
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64) || base64.length % 4 !== 0) return null;
   try {
     return Buffer.from(base64, "base64").length;
   } catch {
@@ -56,24 +55,42 @@ function getBase64DecodedSize(base64Input: string): number | null {
   }
 }
 
+function calcAge(dateOfBirth: string | null | undefined): number {
+  if (!dateOfBirth) return 0;
+  return Math.floor((Date.now() - new Date(dateOfBirth).getTime()) / (365.25 * 24 * 60 * 60 * 1000));
+}
+
+async function logActivity(userId: string, action: string, targetType: string, targetId?: string | null, details?: string, ipAddress?: string) {
+  try {
+    await db.insert(activityLogs).values({
+      id: crypto.randomUUID(),
+      userId,
+      action,
+      targetType,
+      targetId: targetId || null,
+      details: details || null,
+      ipAddress: ipAddress || null,
+    });
+  } catch (e) {
+    console.error("Activity log error:", e);
+  }
+}
+
 const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
 
 function rateLimit(windowMs: number, maxRequests: number) {
   return (req: any, res: any, next: any) => {
-    const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+    const ip = req.ip || req.connection?.remoteAddress || "unknown";
     const key = `${ip}:${req.path}`;
     const now = Date.now();
     const entry = rateLimitStore.get(key);
-
     if (!entry || now > entry.resetAt) {
       rateLimitStore.set(key, { count: 1, resetAt: now + windowMs });
       return next();
     }
-
     if (entry.count >= maxRequests) {
       return res.status(429).json({ error: "Too many requests. Please try again later." });
     }
-
     entry.count++;
     next();
   };
@@ -87,252 +104,55 @@ setInterval(() => {
 }, 60000);
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  
   const authRateLimit = rateLimit(15 * 60 * 1000, 10);
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok" });
   });
 
-  app.get("/api/admin/migration-sql", authenticateUser, requireRole('admin'), async (req, res) => {
-    const sql = `
--- Create sponsor_dependents table
-CREATE TABLE IF NOT EXISTS sponsor_dependents (
-  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  sponsor_user_id varchar REFERENCES users(id),
-  dependent_patient_id varchar REFERENCES patients(id),
-  status text NOT NULL DEFAULT 'pending',
-  relationship text,
-  created_at timestamptz DEFAULT now(),
-  approved_at timestamptz
-);
+  // ============================================================
+  // AUTH ENDPOINTS
+  // ============================================================
 
--- Create file_attachments table
-CREATE TABLE IF NOT EXISTS file_attachments (
-  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  patient_id varchar REFERENCES patients(id),
-  uploaded_by_user_id varchar REFERENCES users(id),
-  file_name text NOT NULL,
-  file_type text NOT NULL,
-  file_size integer NOT NULL,
-  category text NOT NULL DEFAULT 'general',
-  description text,
-  file_data text NOT NULL,
-  created_at timestamptz DEFAULT now()
-);
-
--- Create user_invites table
-CREATE TABLE IF NOT EXISTS user_invites (
-  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  email text NOT NULL,
-  role text NOT NULL DEFAULT 'patient',
-  institution_id varchar,
-  invited_by_id varchar REFERENCES users(id),
-  token text NOT NULL UNIQUE,
-  status text NOT NULL DEFAULT 'pending',
-  expires_at timestamptz NOT NULL,
-  created_at timestamptz DEFAULT now()
-);
-
--- Create activity_logs table
-CREATE TABLE IF NOT EXISTS activity_logs (
-  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  user_id varchar REFERENCES users(id),
-  action text NOT NULL,
-  target_type text NOT NULL,
-  target_id varchar,
-  details text,
-  ip_address text,
-  created_at timestamptz DEFAULT now()
-);
-    `;
-    res.json({ sql: sql.trim() });
-  });
-
-  // Auth endpoints (no authentication required)
   app.post("/api/auth/login", authRateLimit, async (req, res) => {
     try {
       const { email, password } = req.body;
-
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-      if (error) throw error;
-
-      // Check if email is confirmed
-      if (!data.user.email_confirmed_at) {
-        // Sign out the user immediately
-        if (data.session) {
-          await supabase.auth.admin.signOut(data.session.access_token);
-        }
-        
-        return res.status(403).json({ 
-          error: "Please confirm your email before logging in. Check your inbox for the confirmation link.",
-          requiresConfirmation: true,
-          email: data.user.email,
-        });
+      if (!email || !password) {
+        return res.status(400).json({ error: "Email and password are required" });
       }
 
-      const { data: profileData } = await supabase
-        .from('user_profiles')
-        .select('role')
-        .eq('user_id', data.user.id)
-        .single();
+      const [user] = await db.select().from(users).where(eq(users.email, email.toLowerCase())).limit(1);
+      if (!user) {
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
 
-      const { data: userData } = await supabase
-        .from('users')
-        .select('approval_status')
-        .eq('id', data.user.id)
-        .single();
+      if (!user.passwordHash) {
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
 
-      if (profileData?.role === 'clinician' && userData?.approval_status !== 'approved') {
-        // Sign out the user
-        if (data.session) {
-          await supabase.auth.admin.signOut(data.session.access_token);
-        }
+      const valid = await bcrypt.compare(password, user.passwordHash);
+      if (!valid) {
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
 
-        const statusMessage = userData?.approval_status === 'rejected' 
+      const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, user.id)).limit(1);
+
+      if (profile?.role === "clinician" && user.approvalStatus !== "approved") {
+        const statusMessage = user.approvalStatus === "rejected"
           ? "Your clinician registration was rejected. Please contact your institution administrator."
           : "Your clinician account is pending approval by your institution administrator.";
-
-        return res.status(403).json({ 
-          error: statusMessage,
-          approvalStatus: userData?.approval_status,
-        });
+        return res.status(403).json({ error: statusMessage, approvalStatus: user.approvalStatus });
       }
 
+      const token = signToken({ userId: user.id, email: user.email, role: profile?.role || "patient" });
+
       res.json({
-        user: data.user,
-        session: data.session,
+        user: { id: user.id, email: user.email, role: profile?.role || "patient" },
+        session: { access_token: token },
       });
     } catch (error: any) {
       console.error("Login error:", error);
-      res.status(401).json({ error: error.message || "Invalid credentials" });
-    }
-  });
-
-  app.post("/api/auth/google-callback", authRateLimit, async (req, res) => {
-    try {
-      const { access_token, refresh_token } = req.body;
-
-      if (!access_token) {
-        return res.status(400).json({ error: "Access token is required" });
-      }
-
-      const { data: { user }, error: authError } = await supabase.auth.getUser(access_token);
-
-      if (authError || !user) {
-        return res.status(401).json({ error: "Invalid token" });
-      }
-
-      let { data: existingUser } = await supabase
-        .from('users')
-        .select('id, email, approval_status')
-        .eq('id', user.id)
-        .single();
-
-      if (!existingUser) {
-        const { data: newUser, error: createUserError } = await supabase
-          .from('users')
-          .insert({
-            id: user.id,
-            email: user.email,
-            approval_status: null,
-          })
-          .select()
-          .single();
-
-        if (createUserError) {
-          console.error("Error creating user record for Google auth:", createUserError);
-          return res.status(500).json({ error: "Failed to create user account" });
-        }
-
-        existingUser = newUser;
-      }
-
-      let { data: profileData } = await supabase
-        .from('user_profiles')
-        .select('user_id, role, institution_id')
-        .eq('user_id', user.id)
-        .single();
-
-      if (!profileData) {
-        let defaultInstitutionId: string | null = null;
-        const { data: defaultInst } = await supabase
-          .from('institutions')
-          .select('id')
-          .eq('is_default', true)
-          .single();
-        if (defaultInst) {
-          defaultInstitutionId = defaultInst.id;
-        }
-
-        const { data: newProfile, error: profileError } = await supabase
-          .from('user_profiles')
-          .insert({
-            user_id: user.id,
-            role: 'patient',
-            institution_id: defaultInstitutionId,
-          })
-          .select()
-          .single();
-
-        if (profileError) {
-          console.error("Error creating user profile for Google auth:", profileError);
-          return res.status(500).json({ error: "Failed to create user profile" });
-        }
-
-        profileData = newProfile;
-
-        if (newProfile.role === 'patient') {
-          const fullName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'Unknown';
-          const nameParts = fullName.split(' ');
-          const firstName = nameParts[0] || 'Unknown';
-          const lastName = nameParts.slice(1).join(' ') || '';
-          const { error: patientError } = await supabase
-            .from('patients')
-            .insert({
-              id: crypto.randomUUID(),
-              user_id: user.id,
-              first_name: firstName,
-              last_name: lastName,
-              sex: 'unknown',
-              hospital_id: defaultInstitutionId || null,
-              assigned_clinician_id: null,
-            });
-
-          if (patientError) {
-            console.error("Error creating patient record for Google auth:", patientError);
-          }
-        }
-      }
-
-      if (profileData!.role === 'clinician' && existingUser!.approval_status !== 'approved') {
-        const statusMessage = existingUser!.approval_status === 'rejected'
-          ? "Your clinician registration was rejected. Please contact your institution administrator."
-          : "Your clinician account is pending approval by your institution administrator.";
-        return res.status(403).json({
-          error: statusMessage,
-          approvalStatus: existingUser!.approval_status,
-        });
-      }
-
-      res.json({
-        user: {
-          id: user.id,
-          email: user.email,
-          role: profileData!.role,
-        },
-        session: {
-          access_token,
-          refresh_token,
-        },
-      });
-    } catch (error: any) {
-      console.error("Google auth callback error:", error);
-      res.status(500).json({ error: "Google authentication failed" });
+      res.status(500).json({ error: "Login failed" });
     }
   });
 
@@ -344,164 +164,89 @@ CREATE TABLE IF NOT EXISTS activity_logs (
         return res.status(400).json({ error: "Email and password are required" });
       }
 
-      let role: string = 'patient';
+      const [existingUser] = await db.select({ id: users.id }).from(users).where(eq(users.email, email.toLowerCase())).limit(1);
+      if (existingUser) {
+        return res.status(400).json({ error: "An account with this email already exists" });
+      }
+
+      let role = "patient";
       let targetInstitutionId: string | null = null;
       let inviteId: string | null = null;
 
       if (inviteToken) {
-        const { data: invite, error: inviteError } = await supabase
-          .from('user_invites')
-          .select('*')
-          .eq('token', inviteToken)
-          .eq('status', 'pending')
-          .single();
+        const [invite] = await db.select().from(userInvites)
+          .where(and(eq(userInvites.token, inviteToken), eq(userInvites.status, "pending")))
+          .limit(1);
 
-        if (inviteError || !invite) {
+        if (!invite) {
           return res.status(400).json({ error: "Invalid or already used invitation link." });
         }
-
-        if (new Date(invite.expires_at) < new Date()) {
-          await supabase.from('user_invites').update({ status: 'expired' }).eq('id', invite.id);
+        if (new Date(invite.expiresAt) < new Date()) {
+          await db.update(userInvites).set({ status: "expired" }).where(eq(userInvites.id, invite.id));
           return res.status(400).json({ error: "This invitation has expired. Please request a new one." });
         }
-
         if (invite.email.toLowerCase() !== email.toLowerCase()) {
           return res.status(400).json({ error: "This invitation was sent to a different email address." });
         }
-
-        role = invite.role || 'patient';
-        targetInstitutionId = invite.institution_id;
+        role = invite.role || "patient";
+        targetInstitutionId = invite.institutionId || null;
         inviteId = invite.id;
-      } else {
-        if (institutionCode) {
-          const { data: inst } = await supabase
-            .from('institutions')
-            .select('id, name')
-            .eq('id', institutionCode)
-            .single();
-
-          if (!inst) {
-            return res.status(400).json({ error: "Invalid institution code. Please check and try again." });
-          }
-          targetInstitutionId = inst.id;
-        } else {
-          const { data: defaultInst } = await supabase
-            .from('institutions')
-            .select('id')
-            .eq('is_default', true)
-            .single();
-
-          if (defaultInst) {
-            targetInstitutionId = defaultInst.id;
-          }
+      } else if (institutionCode) {
+        const [inst] = await db.select({ id: institutions.id }).from(institutions).where(eq(institutions.id, institutionCode)).limit(1);
+        if (!inst) {
+          return res.status(400).json({ error: "Invalid institution code. Please check and try again." });
         }
+        targetInstitutionId = inst.id;
+      } else {
+        const [defaultInst] = await db.select({ id: institutions.id }).from(institutions).where(eq(institutions.isDefault, true)).limit(1);
+        if (defaultInst) targetInstitutionId = defaultInst.id;
       }
 
-      const emailConfirmationEnabled = process.env.ENABLE_EMAIL_CONFIRMATION === 'true';
+      const passwordHash = await bcrypt.hash(password, 12);
+      const userId = crypto.randomUUID();
+      const approvalStatus = role === "institution_admin" ? "approved" : role === "clinician" ? "pending" : null;
 
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email,
-        password,
+      await db.insert(users).values({
+        id: userId,
+        email: email.toLowerCase(),
+        passwordHash,
+        emailConfirmed: true,
+        approvalStatus,
       });
 
-      if (authError) throw authError;
+      await db.insert(userProfiles).values({
+        userId,
+        role,
+        institutionId: targetInstitutionId,
+      });
 
-      if (!authData.user) {
-        return res.status(500).json({ error: "Failed to create user" });
-      }
+      if (role === "patient") {
+        const patientFullName = fullName || email.split("@")[0];
+        const nameParts = patientFullName.split(" ");
+        const firstName = nameParts[0] || "Unknown";
+        const lastName = nameParts.slice(1).join(" ") || "";
+        const patientSex = gender || "unknown";
 
-      const approvalStatus = (role === 'institution_admin') ? 'approved' : (role === 'clinician' ? 'pending' : null);
-
-      const { error: userError } = await supabase
-        .from('users')
-        .insert({
-          id: authData.user.id,
-          email: authData.user.email!,
-          approval_status: approvalStatus,
+        await db.insert(patients).values({
+          id: crypto.randomUUID(),
+          userId,
+          firstName,
+          lastName,
+          sex: patientSex.toLowerCase(),
+          hospitalId: targetInstitutionId || null,
+          assignedClinicianId: null,
         });
-
-      if (userError) {
-        await supabase.auth.admin.deleteUser(authData.user.id);
-        throw userError;
-      }
-
-      const { error: profileInsertError } = await supabase
-        .from('user_profiles')
-        .upsert({
-          user_id: authData.user.id,
-          role: role,
-          institution_id: targetInstitutionId,
-        }, { onConflict: 'user_id' });
-
-      if (profileInsertError) {
-        await supabase.from('users').delete().eq('id', authData.user.id);
-        await supabase.auth.admin.deleteUser(authData.user.id);
-        throw profileInsertError;
-      }
-
-      if (role === 'patient') {
-        const patientFullName = fullName || email.split('@')[0];
-        const nameParts = patientFullName.split(' ');
-        const firstName = nameParts[0] || 'Unknown';
-        const lastName = nameParts.slice(1).join(' ') || '';
-        const patientSex = gender || 'unknown';
-
-        const { error: patientError } = await supabase
-          .from('patients')
-          .insert({
-            id: crypto.randomUUID(),
-            user_id: authData.user.id,
-            first_name: firstName,
-            last_name: lastName,
-            sex: (patientSex || 'unknown').toLowerCase(),
-            hospital_id: targetInstitutionId || null,
-            assigned_clinician_id: null,
-          });
-
-        if (patientError) {
-          await supabase.from('user_profiles').delete().eq('user_id', authData.user.id);
-          await supabase.from('users').delete().eq('id', authData.user.id);
-          await supabase.auth.admin.deleteUser(authData.user.id);
-          throw patientError;
-        }
       }
 
       if (inviteId) {
-        await supabase.from('user_invites').update({ status: 'used' }).eq('id', inviteId);
+        await db.update(userInvites).set({ status: "used" }).where(eq(userInvites.id, inviteId));
       }
 
-      if (emailConfirmationEnabled && !authData.session) {
-        const redirectTo = `${process.env.VITE_DASHBOARD_URL || 'http://localhost:5000'}/confirm-email`;
-        const { data: linkData, error: linkError } = await supabase.auth.admin.generateLink({
-          type: 'signup',
-          email,
-          password,
-          options: {
-            redirectTo,
-          },
-        });
-
-        if (linkError) {
-          console.error("Error generating confirmation link:", linkError);
-        } else {
-          try {
-            const confirmationEmail = generateConfirmationEmail(email, linkData.properties.action_link);
-            await sendEmail(confirmationEmail);
-          } catch (emailError: any) {
-            console.error("Error sending confirmation email:", emailError);
-          }
-        }
-
-        return res.json({
-          message: "Registration successful. Please check your email to confirm your account.",
-          requiresConfirmation: true,
-        });
-      }
-
+      const token = signToken({ userId, email: email.toLowerCase(), role });
       res.json({
-        user: authData.user,
-        session: authData.session,
-        message: "Registration successful"
+        user: { id: userId, email: email.toLowerCase(), role },
+        session: { access_token: token },
+        message: "Registration successful",
       });
     } catch (error: any) {
       console.error("Registration error:", error);
@@ -512,23 +257,18 @@ CREATE TABLE IF NOT EXISTS activity_logs (
   app.get("/api/auth/verify-invite", authRateLimit, async (req, res) => {
     try {
       const { token } = req.query;
-
-      if (!token || typeof token !== 'string') {
+      if (!token || typeof token !== "string") {
         return res.status(400).json({ error: "Token is required" });
       }
 
-      const { data: invite, error } = await supabase
-        .from('user_invites')
-        .select('email, role, status, expires_at')
-        .eq('token', token)
-        .eq('status', 'pending')
-        .single();
+      const [invite] = await db.select().from(userInvites)
+        .where(and(eq(userInvites.token, token), eq(userInvites.status, "pending")))
+        .limit(1);
 
-      if (error || !invite) {
+      if (!invite) {
         return res.status(404).json({ error: "Invalid or expired invitation" });
       }
-
-      if (new Date(invite.expires_at) < new Date()) {
+      if (new Date(invite.expiresAt) < new Date()) {
         return res.status(400).json({ error: "This invitation has expired" });
       }
 
@@ -539,301 +279,53 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  app.post("/api/patient/complete-profile", authenticateUser, async (req, res) => {
-    try {
-      const userId = req.user!.id;
-      const userRole = req.user!.role;
-
-      if (userRole !== 'patient') {
-        return res.status(403).json({ error: "Only patients can complete this profile" });
-      }
-
-      const { fullName, age, gender, sex, dateOfBirth, institutionCode } = req.body;
-
-      if (!fullName) {
-        return res.status(400).json({ error: "Full name is required" });
-      }
-
-      const patientSex = sex || gender || 'unknown';
-
-      const { data: existingPatient } = await supabase
-        .from('patients')
-        .select('id')
-        .eq('user_id', userId)
-        .single();
-
-      if (existingPatient) {
-        return res.status(400).json({ error: "Patient profile already exists" });
-      }
-
-      let targetInstitutionId: string | null = null;
-
-      if (institutionCode) {
-        const { data: inst } = await supabase
-          .from('institutions')
-          .select('id')
-          .eq('id', institutionCode)
-          .single();
-
-        if (!inst) {
-          return res.status(400).json({ error: "Invalid institution code" });
-        }
-        targetInstitutionId = inst.id;
-      } else {
-        const { data: defaultInst } = await supabase
-          .from('institutions')
-          .select('id')
-          .eq('is_default', true)
-          .single();
-
-        if (defaultInst) {
-          targetInstitutionId = defaultInst.id;
-        }
-      }
-
-      const nameParts = fullName.split(' ');
-      const firstName = nameParts[0] || 'Unknown';
-      const lastName = nameParts.slice(1).join(' ') || '';
-
-      const { data: patient, error: patientError } = await supabase
-        .from('patients')
-        .insert({
-          id: crypto.randomUUID(),
-          user_id: userId,
-          first_name: firstName,
-          last_name: lastName,
-          sex: (patientSex || 'unknown').toLowerCase(),
-          date_of_birth: dateOfBirth || null,
-          hospital_id: targetInstitutionId || null,
-          assigned_clinician_id: null,
-        })
-        .select()
-        .single();
-
-      if (patientError) throw patientError;
-
-      if (targetInstitutionId) {
-        await supabase
-          .from('user_profiles')
-          .update({ institution_id: targetInstitutionId })
-          .eq('user_id', userId);
-      }
-
-      res.json({ patient, message: "Profile completed successfully" });
-    } catch (error: any) {
-      console.error("Complete profile error:", error);
-      res.status(400).json({ error: error.message || "Failed to complete profile" });
-    }
-  });
-
-  app.get("/api/patients/unassigned", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), requireApproved, async (req, res) => {
-    try {
-      const userId = req.user!.id;
-      const userRole = req.user!.role;
-      const userInstitutionId = req.user!.institutionId;
-
-      let query = supabase
-        .from('patients')
-        .select('id, user_id, first_name, last_name, sex, date_of_birth, hospital_id, created_at')
-        .is('assigned_clinician_id', null)
-        .order('created_at', { ascending: true });
-
-      if (userRole === 'clinician' || userRole === 'institution_admin') {
-        if (userInstitutionId) {
-          query = query.eq('hospital_id', userInstitutionId);
-        } else {
-          return res.json([]);
-        }
-      }
-
-      const { data: patients, error } = await query;
-
-      if (error) throw error;
-
-      const patientsWithInstitution = await Promise.all(
-        (patients || []).map(async (patient: any) => {
-          let institutionName = null;
-          if (patient.hospital_id) {
-            const { data: inst } = await supabase
-              .from('institutions')
-              .select('name')
-              .eq('id', patient.hospital_id)
-              .single();
-            institutionName = inst?.name || null;
-          }
-          const name = `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown';
-          const age = patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : 0;
-          return { ...patient, name, age, gender: patient.sex, institutionName };
-        })
-      );
-
-      res.json(patientsWithInstitution);
-    } catch (error: any) {
-      console.error("Error fetching unassigned patients:", error);
-      res.status(500).json({ error: "Failed to fetch unassigned patients" });
-    }
-  });
-
-  app.post("/api/patients/:id/claim", authenticateUser, requireRole('clinician'), requireApproved, async (req, res) => {
-    try {
-      const { id } = req.params;
-      const clinicianId = req.user!.id;
-      const clinicianInstitutionId = resolveInstitutionScope(req.user!.institutionId);
-
-      if (!clinicianInstitutionId) {
-        return res.status(403).json({ error: "Clinician account is not linked to an institution" });
-      }
-
-      const { data: patient, error: fetchError } = await supabase
-        .from('patients')
-        .select('id, assigned_clinician_id, hospital_id, first_name, last_name')
-        .eq('id', id)
-        .single();
-
-      if (fetchError || !patient) {
-        return res.status(404).json({ error: "Patient not found" });
-      }
-
-      if (patient.assigned_clinician_id) {
-        return res.status(400).json({ error: "This patient is already assigned to a clinician" });
-      }
-
-      if (!patient.hospital_id || String(patient.hospital_id) !== String(clinicianInstitutionId)) {
-        return res.status(403).json({ error: "You can only claim patients within your institution" });
-      }
-
-      const { data: updatedRows, error: updateError } = await supabase
-        .from('patients')
-        .update({ assigned_clinician_id: clinicianId })
-        .eq('id', id)
-        .is('assigned_clinician_id', null)
-        .select('id');
-
-      if (updateError) throw updateError;
-
-      if (!updatedRows || updatedRows.length === 0) {
-        return res.status(400).json({ error: "This patient was just claimed by another clinician" });
-      }
-
-      const patientName = `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown';
-      res.json({ message: `Patient ${patientName} has been assigned to you`, patientId: id });
-    } catch (error: any) {
-      console.error("Error claiming patient:", error);
-      res.status(500).json({ error: "Failed to claim patient" });
-    }
-  });
-
-  // Clinician registration endpoint
   app.post("/api/auth/register-clinician", authRateLimit, async (req, res) => {
     try {
       const { email, password, fullName, licenseNumber, specialty, phone, institutionId } = req.body;
 
-      // Validate inputs
       if (!email || !password || !fullName) {
         return res.status(400).json({ error: "Email, password, and full name are required" });
       }
 
-      // Get default institution if no institution selected
+      const [existingUser] = await db.select({ id: users.id }).from(users).where(eq(users.email, email.toLowerCase())).limit(1);
+      if (existingUser) {
+        return res.status(400).json({ error: "An account with this email already exists" });
+      }
+
       let selectedInstitutionId = institutionId;
       if (!selectedInstitutionId) {
-        const { data: defaultInstitution } = await supabase
-          .from('institutions')
-          .select('id')
-          .eq('is_default', true)
-          .single();
-
+        const [defaultInstitution] = await db.select({ id: institutions.id }).from(institutions).where(eq(institutions.isDefault, true)).limit(1);
         if (!defaultInstitution) {
           return res.status(400).json({ error: "No institution available. Please contact support." });
         }
         selectedInstitutionId = defaultInstitution.id;
       }
 
-      // Check if email confirmation is enabled in environment
-      const emailConfirmationEnabled = process.env.ENABLE_EMAIL_CONFIRMATION === 'true';
+      const passwordHash = await bcrypt.hash(password, 12);
+      const userId = crypto.randomUUID();
 
-      // Create user in Supabase Auth
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email,
-        password,
+      await db.insert(users).values({
+        id: userId,
+        email: email.toLowerCase(),
+        passwordHash,
+        emailConfirmed: true,
+        approvalStatus: "pending",
       });
 
-      if (authError) throw authError;
+      await db.insert(userProfiles).values({
+        userId,
+        role: "clinician",
+        institutionId: selectedInstitutionId,
+      });
 
-      if (!authData.user) {
-        return res.status(500).json({ error: "Failed to create user" });
-      }
-
-      const { error: userError } = await supabase
-        .from('users')
-        .insert({
-          id: authData.user.id,
-          email: authData.user.email!,
-          approval_status: 'pending',
-        });
-
-      if (userError) {
-        await supabase.auth.admin.deleteUser(authData.user.id);
-        throw userError;
-      }
-
-      const { error: upError } = await supabase
-        .from('user_profiles')
-        .upsert({
-          user_id: authData.user.id,
-          role: 'clinician',
-          institution_id: selectedInstitutionId,
-        }, { onConflict: 'user_id' });
-
-      if (upError) {
-        await supabase.from('users').delete().eq('id', authData.user.id);
-        await supabase.auth.admin.deleteUser(authData.user.id);
-        throw upError;
-      }
-
-      const { error: profileError } = await supabase
-        .from('clinician_profiles')
-        .insert({
-          user_id: authData.user.id,
-          full_name: fullName,
-          license_number: licenseNumber || null,
-          specialty: specialty || null,
-          phone: phone || null,
-        });
-
-      if (profileError) {
-        await supabase.from('user_profiles').delete().eq('user_id', authData.user.id);
-        await supabase.from('users').delete().eq('id', authData.user.id);
-        await supabase.auth.admin.deleteUser(authData.user.id);
-        throw profileError;
-      }
-
-      // If email confirmation is enabled
-      if (emailConfirmationEnabled && !authData.session) {
-        const redirectTo = `${process.env.VITE_DASHBOARD_URL || 'http://localhost:5000'}/confirm-email`;
-        const { data: linkData, error: linkError } = await supabase.auth.admin.generateLink({
-          type: 'signup',
-          email,
-          password,
-          options: {
-            redirectTo,
-          },
-        });
-
-        if (!linkError && linkData) {
-          try {
-            const confirmationEmail = generateConfirmationEmail(email, linkData.properties.action_link);
-            await sendEmail(confirmationEmail);
-          } catch (emailError: any) {
-            console.error("Error sending confirmation email:", emailError);
-          }
-        }
-
-        return res.json({
-          message: "Registration successful. Your account is pending approval. Please check your email to confirm your account.",
-          requiresConfirmation: true,
-          requiresApproval: true,
-        });
-      }
+      await db.insert(clinicianProfiles).values({
+        id: crypto.randomUUID(),
+        userId,
+        fullName,
+        licenseNumber: licenseNumber || null,
+        specialty: specialty || null,
+        phone: phone || null,
+      });
 
       res.json({
         message: "Registration successful. Your account is pending approval by your institution administrator.",
@@ -846,98 +338,33 @@ CREATE TABLE IF NOT EXISTS activity_logs (
   });
 
   app.post("/api/auth/logout", authRateLimit, async (req, res) => {
-    try {
-      const authHeader = req.headers.authorization;
-      const token = authHeader?.substring(7);
-
-      if (token) {
-        await supabase.auth.admin.signOut(token);
-      }
-
-      res.json({ message: "Logged out successfully" });
-    } catch (error) {
-      console.error("Logout error:", error);
-      res.status(500).json({ error: "Logout failed" });
-    }
-  });
-
-  app.post("/api/auth/resend-confirmation", authRateLimit, async (req, res) => {
-    try {
-      const { email } = req.body;
-
-      if (!email) {
-        return res.status(400).json({ error: "Email is required" });
-      }
-
-      const { data: userRecord } = await supabase.from('users').select('id').eq('email', email).single();
-      if (!userRecord) {
-        return res.json({ message: "If an account exists with this email, a confirmation link has been sent." });
-      }
-      const { data: { user: authUser } } = await supabase.auth.admin.getUserById(userRecord.id);
-      const user = authUser;
-
-      if (!user) {
-        return res.json({ message: "If an account exists with this email, a confirmation link has been sent." });
-      }
-
-      if (user.email_confirmed_at) {
-        return res.status(400).json({ error: "Email is already confirmed. You can log in." });
-      }
-
-      // Generate new confirmation link (use magiclink instead of signup for resend)
-      const redirectTo = `${process.env.VITE_DASHBOARD_URL || 'http://localhost:5000'}/confirm-email`;
-      const { data: linkData, error: linkError } = await supabase.auth.admin.generateLink({
-        type: 'magiclink',
-        email,
-        options: {
-          redirectTo,
-        },
-      });
-
-      if (linkError) throw linkError;
-
-      // Send confirmation email via Resend
-      const confirmationEmail = generateConfirmationEmail(email, linkData.properties.action_link);
-      await sendEmail(confirmationEmail);
-
-      res.json({ message: "Confirmation email sent. Please check your inbox." });
-    } catch (error: any) {
-      console.error("Resend confirmation error:", error);
-      res.status(500).json({ error: "Failed to send confirmation email" });
-    }
+    res.json({ message: "Logged out successfully" });
   });
 
   app.post("/api/auth/forgot-password", authRateLimit, async (req, res) => {
     try {
       const { email } = req.body;
+      if (!email) return res.status(400).json({ error: "Email is required" });
 
-      if (!email) {
-        return res.status(400).json({ error: "Email is required" });
-      }
-
-      // Generate password reset link using Supabase admin
-      const redirectTo = `${process.env.VITE_DASHBOARD_URL || 'http://localhost:5000'}/reset-password`;
-      const { data: linkData, error: linkError } = await supabase.auth.admin.generateLink({
-        type: 'recovery',
-        email,
-        options: {
-          redirectTo,
-        },
-      });
-
-      if (linkError) {
-        // Don't reveal if user exists for security
-        console.error("Error generating reset link:", linkError);
+      const [user] = await db.select({ id: users.id, email: users.email }).from(users).where(eq(users.email, email.toLowerCase())).limit(1);
+      if (!user) {
         return res.json({ message: "If an account exists with this email, a password reset link has been sent." });
       }
 
-      // Send password reset email via Resend
+      const resetToken = crypto.randomBytes(32).toString("hex");
+      const resetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+      await db.update(users).set({
+        passwordResetToken: resetToken,
+        passwordResetExpires: resetExpires,
+      }).where(eq(users.id, user.id));
+
+      const resetUrl = `${process.env.VITE_DASHBOARD_URL || "http://localhost:5000"}/reset-password?token=${resetToken}`;
       try {
-        const resetEmail = generatePasswordResetEmail(email, linkData.properties.action_link);
+        const resetEmail = generatePasswordResetEmail(email, resetUrl);
         await sendEmail(resetEmail);
       } catch (emailError: any) {
         console.error("Error sending password reset email:", emailError);
-        throw emailError;
       }
 
       res.json({ message: "If an account exists with this email, a password reset link has been sent." });
@@ -949,46 +376,34 @@ CREATE TABLE IF NOT EXISTS activity_logs (
 
   app.post("/api/auth/reset-password", authRateLimit, async (req, res) => {
     try {
-      const { password, access_token } = req.body;
+      const { password, token } = req.body;
+      if (!password) return res.status(400).json({ error: "Password is required" });
+      if (!token) return res.status(400).json({ error: "Reset token is required" });
 
-      // Validate required fields
-      if (!password) {
-        return res.status(400).json({ error: "Password is required" });
+      const [user] = await db.select().from(users)
+        .where(eq(users.passwordResetToken, token))
+        .limit(1);
+
+      if (!user || !user.passwordResetExpires || new Date(user.passwordResetExpires) < new Date()) {
+        return res.status(401).json({ error: "Invalid or expired reset token. Please request a new password reset link." });
       }
 
-      if (!access_token) {
-        return res.status(400).json({ error: "Reset token is required" });
-      }
+      const passwordHash = await bcrypt.hash(password, 12);
+      await db.update(users).set({
+        passwordHash,
+        passwordResetToken: null,
+        passwordResetExpires: null,
+      }).where(eq(users.id, user.id));
 
-      // Verify the token by getting the user from Supabase
-      // This validates that the token is authentic and not forged
-      const { data: { user }, error: verifyError } = await supabase.auth.getUser(access_token);
-
-      if (verifyError || !user) {
-        console.error("Token verification failed:", verifyError?.message);
-        return res.status(401).json({ 
-          error: "Invalid or expired reset token. Please request a new password reset link." 
-        });
-      }
-
-      // Update the user's password using admin API
-      const { error: updateError } = await supabase.auth.admin.updateUserById(
-        user.id,
-        { password: password }
-      );
-
-      if (updateError) {
-        console.error("Update password error:", updateError);
-        throw updateError;
-      }
-
-      res.json({ 
-        message: "Password reset successfully. Please log in with your new password."
-      });
+      res.json({ message: "Password reset successfully. Please log in with your new password." });
     } catch (error: any) {
       console.error("Reset password error:", error);
       res.status(500).json({ error: error.message || "Failed to reset password" });
     }
+  });
+
+  app.post("/api/auth/resend-confirmation", authRateLimit, async (req, res) => {
+    res.json({ message: "If an account exists with this email, a confirmation link has been sent." });
   });
 
   app.get("/api/auth/me", authenticateUser, async (req, res) => {
@@ -1004,67 +419,174 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     });
   });
 
-  // Protected routes - require authentication
-  
-  // Get all patients (role-based access)
-  // - Clinicians: see only patients assigned to them
-  // - Institution admins: see only patients assigned to them
-  // - Admins: see all patients
-  app.get("/api/patients", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), requireApproved, async (req, res) => {
+  // ============================================================
+  // PATIENT ENDPOINTS (for clinicians/admins viewing patients)
+  // ============================================================
+
+  app.post("/api/patient/complete-profile", authenticateUser, async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      const userRole = req.user!.role;
+
+      if (userRole !== "patient") {
+        return res.status(403).json({ error: "Only patients can complete this profile" });
+      }
+
+      const { fullName, gender, sex, dateOfBirth, institutionCode } = req.body;
+      if (!fullName) return res.status(400).json({ error: "Full name is required" });
+
+      const [existingPatient] = await db.select({ id: patients.id }).from(patients).where(eq(patients.userId, userId)).limit(1);
+      if (existingPatient) return res.status(400).json({ error: "Patient profile already exists" });
+
+      let targetInstitutionId: string | null = null;
+      if (institutionCode) {
+        const [inst] = await db.select({ id: institutions.id }).from(institutions).where(eq(institutions.id, institutionCode)).limit(1);
+        if (!inst) return res.status(400).json({ error: "Invalid institution code" });
+        targetInstitutionId = inst.id;
+      } else {
+        const [defaultInst] = await db.select({ id: institutions.id }).from(institutions).where(eq(institutions.isDefault, true)).limit(1);
+        if (defaultInst) targetInstitutionId = defaultInst.id;
+      }
+
+      const nameParts = fullName.split(" ");
+      const firstName = nameParts[0] || "Unknown";
+      const lastName = nameParts.slice(1).join(" ") || "";
+      const patientSex = (sex || gender || "unknown").toLowerCase();
+
+      const [patient] = await db.insert(patients).values({
+        id: crypto.randomUUID(),
+        userId,
+        firstName,
+        lastName,
+        sex: patientSex,
+        dateOfBirth: dateOfBirth || null,
+        hospitalId: targetInstitutionId || null,
+        assignedClinicianId: null,
+      }).returning();
+
+      if (targetInstitutionId) {
+        await db.update(userProfiles).set({ institutionId: targetInstitutionId }).where(eq(userProfiles.userId, userId));
+      }
+
+      res.json({ patient, message: "Profile completed successfully" });
+    } catch (error: any) {
+      console.error("Complete profile error:", error);
+      res.status(400).json({ error: error.message || "Failed to complete profile" });
+    }
+  });
+
+  app.get("/api/patients/unassigned", authenticateUser, requireRole("clinician", "admin", "institution_admin"), requireApproved, async (req, res) => {
+    try {
+      const userRole = req.user!.role;
+      const userInstitutionId = req.user!.institutionId;
+
+      let conditions_arr: any[] = [isNull(patients.assignedClinicianId)];
+
+      if (userRole === "clinician" || userRole === "institution_admin") {
+        if (!userInstitutionId) return res.json([]);
+        conditions_arr.push(eq(patients.hospitalId, userInstitutionId));
+      }
+
+      const result = await db.select().from(patients).where(and(...conditions_arr)).orderBy(asc(patients.createdAt));
+
+      const patientsWithInstitution = await Promise.all(
+        result.map(async (patient) => {
+          let institutionName = null;
+          if (patient.hospitalId) {
+            const [inst] = await db.select({ name: institutions.name }).from(institutions).where(eq(institutions.id, patient.hospitalId)).limit(1);
+            institutionName = inst?.name || null;
+          }
+          const name = `${patient.firstName || ""} ${patient.lastName || ""}`.trim() || "Unknown";
+          const age = calcAge(patient.dateOfBirth);
+          return { ...patient, name, age, gender: patient.sex, institutionName };
+        })
+      );
+
+      res.json(patientsWithInstitution);
+    } catch (error: any) {
+      console.error("Error fetching unassigned patients:", error);
+      res.status(500).json({ error: "Failed to fetch unassigned patients" });
+    }
+  });
+
+  app.post("/api/patients/:id/claim", authenticateUser, requireRole("clinician"), requireApproved, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const clinicianId = req.user!.id;
+      const clinicianInstitutionId = resolveInstitutionScope(req.user!.institutionId);
+
+      if (!clinicianInstitutionId) {
+        return res.status(403).json({ error: "Clinician account is not linked to an institution" });
+      }
+
+      const [patient] = await db.select().from(patients).where(eq(patients.id, id)).limit(1);
+      if (!patient) return res.status(404).json({ error: "Patient not found" });
+      if (patient.assignedClinicianId) return res.status(400).json({ error: "This patient is already assigned to a clinician" });
+      if (!patient.hospitalId || String(patient.hospitalId) !== String(clinicianInstitutionId)) {
+        return res.status(403).json({ error: "You can only claim patients within your institution" });
+      }
+
+      const updated = await db.update(patients).set({ assignedClinicianId: clinicianId })
+        .where(and(eq(patients.id, id), isNull(patients.assignedClinicianId)))
+        .returning({ id: patients.id });
+
+      if (!updated.length) {
+        return res.status(400).json({ error: "This patient was just claimed by another clinician" });
+      }
+
+      const patientName = `${patient.firstName || ""} ${patient.lastName || ""}`.trim() || "Unknown";
+      res.json({ message: `Patient ${patientName} has been assigned to you`, patientId: id });
+    } catch (error: any) {
+      console.error("Error claiming patient:", error);
+      res.status(500).json({ error: "Failed to claim patient" });
+    }
+  });
+
+  app.get("/api/patients", authenticateUser, requireRole("clinician", "admin", "institution_admin"), requireApproved, async (req, res) => {
     try {
       const userId = req.user!.id;
       const userRole = req.user!.role;
       const userInstitutionId = resolveInstitutionScope(req.user!.institutionId);
 
-      let patientsQuery = supabase
-        .from("patients")
-        .select("*");
-
-      if (userRole === 'clinician') {
-        patientsQuery = patientsQuery.eq('assigned_clinician_id', userId);
-      } else if (userRole === 'institution_admin') {
-        if (!userInstitutionId) {
-          return res.status(403).json({ error: "Institution admin account is not linked to an institution" });
-        }
-        patientsQuery = patientsQuery.eq('hospital_id', userInstitutionId);
+      let whereConditions: any[] = [];
+      if (userRole === "clinician") {
+        whereConditions.push(eq(patients.assignedClinicianId, userId));
+      } else if (userRole === "institution_admin") {
+        if (!userInstitutionId) return res.status(403).json({ error: "Institution admin account is not linked to an institution" });
+        whereConditions.push(eq(patients.hospitalId, userInstitutionId));
       }
 
-      const { data: patients, error: patientsError } = await patientsQuery.order("created_at", { ascending: false });
+      const patientList = await db.select().from(patients)
+        .where(whereConditions.length ? and(...whereConditions) : undefined)
+        .orderBy(desc(patients.createdAt));
 
-      if (patientsError) throw patientsError;
+      if (!patientList.length) return res.json([]);
 
-      if (!patients || patients.length === 0) {
-        return res.json([]);
-      }
-
-      const patientUserIds = patients.map(p => p.user_id).filter(Boolean);
+      const patientUserIds = patientList.map((p) => p.userId).filter(Boolean) as string[];
       let latestRiskByUserId: Record<string, any> = {};
-      if (patientUserIds.length > 0) {
-        const { data: riskScores } = await supabase
-          .from('risk_scores')
-          .select('user_id, score, level, generated_at')
-          .in('user_id', patientUserIds)
-          .order('generated_at', { ascending: false });
 
-        latestRiskByUserId = riskScores?.reduce((acc, rs) => {
-          if (!acc[rs.user_id]) {
-            acc[rs.user_id] = rs;
-          }
+      if (patientUserIds.length > 0) {
+        const allRiskScores = await db.select().from(riskScores)
+          .where(inArray(riskScores.userId, patientUserIds))
+          .orderBy(desc(riskScores.generatedAt));
+
+        latestRiskByUserId = allRiskScores.reduce((acc, rs) => {
+          if (!acc[rs.userId!]) acc[rs.userId!] = rs;
           return acc;
-        }, {} as Record<string, any>) || {};
+        }, {} as Record<string, any>);
       }
 
-      const transformedPatients = patients.map(patient => {
-        const riskData = patient.user_id ? latestRiskByUserId[patient.user_id] : null;
+      const transformedPatients = patientList.map((patient) => {
+        const riskData = patient.userId ? latestRiskByUserId[patient.userId] : null;
         return {
           id: patient.id,
-          name: `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown',
-          age: patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : 0,
-          gender: patient.sex || 'N/A',
+          name: `${patient.firstName || ""} ${patient.lastName || ""}`.trim() || "Unknown",
+          age: calcAge(patient.dateOfBirth),
+          gender: patient.sex || "N/A",
           conditions: [],
           riskScore: riskData?.score || 0,
           riskLevel: riskData?.level || "low",
-          lastSync: riskData?.generated_at || patient.created_at,
+          lastSync: riskData?.generatedAt || patient.createdAt,
         };
       });
 
@@ -1075,65 +597,53 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  // Get single patient with full details
-  app.get("/api/patients/:id", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), requireApproved, async (req, res) => {
+  app.get("/api/patients/:id", authenticateUser, requireRole("clinician", "admin", "institution_admin"), requireApproved, async (req, res) => {
     try {
       const { id } = req.params;
       const userId = req.user!.id;
       const userRole = req.user!.role;
       const userInstitutionId = resolveInstitutionScope(req.user!.institutionId);
 
-      if (userRole === 'institution_admin' && !userInstitutionId) {
+      if (userRole === "institution_admin" && !userInstitutionId) {
         return res.status(403).json({ error: "Institution admin account is not linked to an institution" });
       }
 
-      // Check if user has permission to view this patient
-      const { data: patient, error: patientError } = await supabase
-        .from("patients")
-        .select("*")
-        .eq("id", id)
-        .single();
+      const [patient] = await db.select().from(patients).where(eq(patients.id, id)).limit(1);
+      if (!patient) return res.status(404).json({ error: "Patient not found" });
 
-      if (patientError) throw patientError;
-
-      if (userRole === 'clinician' && patient.assigned_clinician_id !== userId) {
+      if (userRole === "clinician" && patient.assignedClinicianId !== userId) {
         return res.status(403).json({ error: "Access denied - patient not assigned to you" });
       }
-      if (userRole === 'institution_admin' && String(patient.hospital_id) !== String(userInstitutionId)) {
+      if (userRole === "institution_admin" && String(patient.hospitalId) !== String(userInstitutionId)) {
         return res.status(403).json({ error: "Access denied - patient not in your institution" });
       }
 
-      let riskScore: any = null;
-      if (patient.user_id) {
-        const { data: riskScores } = await supabase
-          .from("risk_scores")
-          .select("score, level, generated_at")
-          .eq("user_id", patient.user_id)
-          .order("generated_at", { ascending: false })
+      let riskData: any = null;
+      if (patient.userId) {
+        const [rs] = await db.select().from(riskScores)
+          .where(eq(riskScores.userId, patient.userId))
+          .orderBy(desc(riskScores.generatedAt))
           .limit(1);
-        riskScore = riskScores?.[0];
+        riskData = rs;
       }
 
-      const transformedPatient = {
+      res.json({
         id: patient.id,
-        name: `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown',
-        age: patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : 0,
-        gender: patient.sex || 'N/A',
+        name: `${patient.firstName || ""} ${patient.lastName || ""}`.trim() || "Unknown",
+        age: calcAge(patient.dateOfBirth),
+        gender: patient.sex || "N/A",
         conditions: [],
-        riskScore: riskScore?.score || 0,
-        riskLevel: riskScore?.level || "low",
-        lastSync: riskScore?.generated_at || patient.created_at,
-      };
-
-      res.json(transformedPatient);
+        riskScore: riskData?.score || 0,
+        riskLevel: riskData?.level || "low",
+        lastSync: riskData?.generatedAt || patient.createdAt,
+      });
     } catch (error) {
       console.error("Error fetching patient:", error);
       res.status(500).json({ error: "Failed to fetch patient" });
     }
   });
 
-  // Get vital readings for a patient
-  app.get("/api/patients/:id/vitals", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), requireApproved, async (req, res) => {
+  app.get("/api/patients/:id/vitals", authenticateUser, requireRole("clinician", "admin", "institution_admin"), requireApproved, async (req, res) => {
     try {
       const { id } = req.params;
       const { type, days = 7 } = req.query;
@@ -1141,49 +651,42 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       const userRole = req.user!.role;
       const userInstitutionId = resolveInstitutionScope(req.user!.institutionId);
 
-      if (userRole === 'institution_admin' && !userInstitutionId) {
+      if (userRole === "institution_admin" && !userInstitutionId) {
         return res.status(403).json({ error: "Institution admin account is not linked to an institution" });
       }
 
-      const { data: patient } = await supabase
-        .from("patients")
-        .select("user_id, assigned_clinician_id, hospital_id")
-        .eq("id", id)
-        .single();
+      const [patient] = await db.select({
+        userId: patients.userId,
+        assignedClinicianId: patients.assignedClinicianId,
+        hospitalId: patients.hospitalId,
+      }).from(patients).where(eq(patients.id, id)).limit(1);
 
-      if (userRole === 'clinician' && patient?.assigned_clinician_id !== userId) {
+      if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+      if (userRole === "clinician" && patient.assignedClinicianId !== userId) {
         return res.status(403).json({ error: "Access denied - patient not assigned to you" });
       }
-      if (userRole === 'institution_admin' && String(patient?.hospital_id) !== String(userInstitutionId)) {
+      if (userRole === "institution_admin" && String(patient.hospitalId) !== String(userInstitutionId)) {
         return res.status(403).json({ error: "Access denied - patient not in your institution" });
       }
 
-      const patientUserId = patient?.user_id;
-      if (!patientUserId) {
-        return res.status(404).json({ error: "Patient user_id not found" });
-      }
+      if (!patient.userId) return res.status(404).json({ error: "Patient user_id not found" });
 
-      let query = supabase
-        .from("health_readings")
-        .select("*")
-        .eq("user_id", patientUserId)
-        .gte("recorded_at", new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000).toISOString())
-        .order("recorded_at", { ascending: false });
+      const since = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000).toISOString();
+
+      let whereClause: any = and(
+        eq(healthReadings.userId, patient.userId as any),
+        gte(healthReadings.recordedAt, new Date(since))
+      );
 
       if (type) {
         const healthType = toHealthType(type as string);
-        query = query.eq("type", healthType);
+        whereClause = and(whereClause, eq(healthReadings.type, healthType));
       }
 
-      const { data: vitals, error } = await query;
+      const vitals = await db.select().from(healthReadings).where(whereClause).orderBy(desc(healthReadings.recordedAt));
 
-      if (error) throw error;
-
-      const transformed = (vitals || []).map((v: any) => ({
-        ...v,
-        type: toDisplayType(v.type),
-      }));
-
+      const transformed = vitals.map((v) => ({ ...v, type: toDisplayType(v.type) }));
       res.json(transformed);
     } catch (error) {
       console.error("Error fetching vitals:", error);
@@ -1191,342 +694,283 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  // Get all alerts (role-based access)
-  // - Clinicians: see only alerts for patients assigned to them
-  // - Institution admins: NO access (they manage clinicians, not patients)
-  // - Admins: see all alerts
-  app.get("/api/alerts", authenticateUser, requireRole('clinician', 'admin'), requireApproved, async (req, res) => {
+  // ============================================================
+  // ALERTS
+  // ============================================================
+
+  app.get("/api/alerts", authenticateUser, requireRole("clinician", "admin"), requireApproved, async (req, res) => {
     try {
       const userId = req.user!.id;
       const userRole = req.user!.role;
 
       let patientUserIds: string[] = [];
-      
-      if (userRole === 'clinician') {
-        const { data: patients } = await supabase
-          .from("patients")
-          .select("user_id")
-          .eq("assigned_clinician_id", userId);
-        patientUserIds = patients?.map(p => p.user_id).filter(Boolean) || [];
+      if (userRole === "clinician") {
+        const clinicianPatients = await db.select({ userId: patients.userId }).from(patients).where(eq(patients.assignedClinicianId, userId));
+        patientUserIds = clinicianPatients.map((p) => p.userId).filter(Boolean) as string[];
       }
 
-      let alertsQuery = supabase
-        .from("alerts")
-        .select("*")
-        .order("triggered_at", { ascending: false })
+      if (userRole === "clinician" && patientUserIds.length === 0) return res.json([]);
+
+      const whereCondition = userRole === "clinician"
+        ? and(inArray(alerts.userId, patientUserIds))
+        : undefined;
+
+      const alertList = await db.select().from(alerts)
+        .where(whereCondition)
+        .orderBy(desc(alerts.triggeredAt))
         .limit(50);
 
-      if (userRole === 'clinician' && patientUserIds.length > 0) {
-        alertsQuery = alertsQuery.in("user_id", patientUserIds);
-      } else if (userRole === 'clinician' && patientUserIds.length === 0) {
-        return res.json([]);
-      }
-
-      const { data: alerts, error } = await alertsQuery;
-
-      if (error) throw error;
-
-      const alertUserIds = Array.from(new Set(alerts?.map(a => a.user_id).filter(Boolean) || []));
+      const alertUserIds = Array.from(new Set(alertList.map((a) => a.userId).filter(Boolean) as string[]));
       let patientNamesByUserId: Record<string, string> = {};
+
       if (alertUserIds.length > 0) {
-        const { data: patientsForAlerts } = await supabase
-          .from("patients")
-          .select("user_id, first_name, last_name")
-          .in("user_id", alertUserIds);
-        patientsForAlerts?.forEach(p => {
-          patientNamesByUserId[p.user_id] = `${p.first_name || ''} ${p.last_name || ''}`.trim() || 'Unknown';
+        const patientsForAlerts = await db.select({ userId: patients.userId, firstName: patients.firstName, lastName: patients.lastName })
+          .from(patients)
+          .where(inArray(patients.userId, alertUserIds));
+        patientsForAlerts.forEach((p) => {
+          if (p.userId) patientNamesByUserId[p.userId] = `${p.firstName || ""} ${p.lastName || ""}`.trim() || "Unknown";
         });
       }
 
-      const transformedAlerts = alerts?.map(a => ({
+      const transformedAlerts = alertList.map((a) => ({
         id: a.id,
-        patientId: a.user_id,
-        patientName: patientNamesByUserId[a.user_id] || "Unknown",
-        type: a.alert_type,
+        patientId: a.userId,
+        patientName: a.userId ? (patientNamesByUserId[a.userId] || "Unknown") : "Unknown",
+        type: a.alertType,
         message: a.message,
         severity: a.severity,
-        timestamp: a.triggered_at,
-        isRead: a.is_resolved,
+        timestamp: a.triggeredAt,
+        isRead: a.isResolved,
       }));
 
-      res.json(transformedAlerts || []);
+      res.json(transformedAlerts);
     } catch (error) {
       console.error("Error fetching alerts:", error);
       res.status(500).json({ error: "Failed to fetch alerts" });
     }
   });
 
-  // Mark alert as read (with ownership verification)
-  // Institution admins cannot access alerts - they manage clinicians, not patients
-  app.patch("/api/alerts/:id", authenticateUser, requireRole('clinician', 'admin'), requireApproved, async (req, res) => {
+  app.patch("/api/alerts/:id", authenticateUser, requireRole("clinician", "admin"), requireApproved, async (req, res) => {
     try {
       const { id } = req.params;
+      const alertId = parseInt(id, 10);
+      if (isNaN(alertId)) return res.status(400).json({ error: "Invalid alert ID" });
       const { isRead } = req.body;
       const userId = req.user!.id;
       const userRole = req.user!.role;
 
-      const { data: alert, error: alertError } = await supabase
-        .from("alerts")
-        .select("*")
-        .eq("id", id)
-        .single();
+      const [alert] = await db.select().from(alerts).where(eq(alerts.id, alertId)).limit(1);
+      if (!alert) return res.status(404).json({ error: "Alert not found" });
 
-      if (alertError || !alert) {
-        return res.status(404).json({ error: "Alert not found" });
-      }
-
-      if (userRole === 'clinician') {
-        const { data: patient } = await supabase
-          .from("patients")
-          .select("assigned_clinician_id")
-          .eq("user_id", alert.user_id)
-          .single();
-
-        if (patient?.assigned_clinician_id !== userId) {
+      if (userRole === "clinician" && alert.userId) {
+        const [patient] = await db.select({ assignedClinicianId: patients.assignedClinicianId })
+          .from(patients).where(eq(patients.userId, alert.userId)).limit(1);
+        if (patient?.assignedClinicianId !== userId) {
           return res.status(403).json({ error: "Access denied - patient not assigned to you" });
         }
       }
 
-      const { data, error } = await supabase
-        .from("alerts")
-        .update({ is_resolved: isRead })
-        .eq("id", id)
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      res.json(data);
+      const [updated] = await db.update(alerts).set({ isResolved: isRead }).where(eq(alerts.id, alertId)).returning();
+      res.json(updated);
     } catch (error) {
       console.error("Error updating alert:", error);
       res.status(500).json({ error: "Failed to update alert" });
     }
   });
 
-  // Get dashboard stats (role-based filtering)
-  // - Clinicians: see patient stats for their assigned patients
-  // - Institution admins: see clinician stats for their institution
-  // - Admins: see global patient stats
-  app.get("/api/dashboard/stats", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), requireApproved, async (req, res) => {
+  app.patch("/api/alerts/:id/respond", authenticateUser, requireRole("clinician", "admin"), requireApproved, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const alertId = parseInt(id, 10);
+      if (isNaN(alertId)) return res.status(400).json({ error: "Invalid alert ID" });
+      const clinicianId = req.user!.id;
+      const userRole = req.user!.role;
+
+      const [existingAlert] = await db.select().from(alerts).where(eq(alerts.id, alertId)).limit(1);
+      if (!existingAlert) return res.status(404).json({ error: "Alert not found" });
+
+      if (userRole === "clinician" && existingAlert.userId) {
+        const [patient] = await db.select({ assignedClinicianId: patients.assignedClinicianId })
+          .from(patients).where(eq(patients.userId, existingAlert.userId)).limit(1);
+        if (patient?.assignedClinicianId !== clinicianId) {
+          return res.status(403).json({ error: "Access denied - patient not assigned to you" });
+        }
+      }
+
+      if (existingAlert.respondedById) {
+        return res.status(400).json({ error: "Alert already responded to" });
+      }
+
+      const [data] = await db.update(alerts).set({
+        isResolved: true,
+        respondedById: clinicianId,
+        respondedAt: new Date(),
+      }).where(and(eq(alerts.id, alertId), isNull(alerts.respondedById))).returning();
+
+      res.json(data);
+    } catch (error) {
+      console.error("Error responding to alert:", error);
+      res.status(500).json({ error: "Failed to respond to alert" });
+    }
+  });
+
+  // ============================================================
+  // DASHBOARD
+  // ============================================================
+
+  app.get("/api/dashboard/stats", authenticateUser, requireRole("clinician", "admin", "institution_admin"), requireApproved, async (req, res) => {
     try {
       const userId = req.user!.id;
       const userRole = req.user!.role;
       const userInstitutionId = resolveInstitutionScope(req.user!.institutionId);
 
-      if (userRole === 'institution_admin') {
-        if (!userInstitutionId) {
-          return res.status(403).json({ error: "Institution admin account is not linked to an institution" });
-        }
+      if (userRole === "institution_admin") {
+        if (!userInstitutionId) return res.status(403).json({ error: "Institution admin account is not linked to an institution" });
 
-        const { data: clinicianProfiles } = await supabase
-          .from('user_profiles')
-          .select('user_id')
-          .eq('role', 'clinician')
-          .eq('institution_id', userInstitutionId);
+        const clinicianProfileList = await db.select({ userId: userProfiles.userId })
+          .from(userProfiles)
+          .where(and(eq(userProfiles.role, "clinician"), eq(userProfiles.institutionId, userInstitutionId)));
 
-        const clinicianUserIds = clinicianProfiles?.map(p => p.user_id) || [];
+        const clinicianUserIds = clinicianProfileList.map((p) => p.userId);
+        let clinicianList: any[] = [];
 
-        let clinicians: any[] = [];
         if (clinicianUserIds.length > 0) {
-          const { data } = await supabase
-            .from('users')
-            .select('id, approval_status')
-            .in('id', clinicianUserIds);
-          clinicians = data || [];
+          clinicianList = await db.select({ id: users.id, approvalStatus: users.approvalStatus })
+            .from(users).where(inArray(users.id, clinicianUserIds));
         }
 
-        const totalClinicians = clinicians?.length || 0;
-        const approvedClinicians = clinicians?.filter(c => c.approval_status === 'approved').length || 0;
-        const pendingApprovals = clinicians?.filter(c => c.approval_status === 'pending').length || 0;
+        const totalClinicians = clinicianList.length;
+        const approvedClinicians = clinicianList.filter((c) => c.approvalStatus === "approved").length;
+        const pendingApprovals = clinicianList.filter((c) => c.approvalStatus === "pending").length;
 
-        // Get average performance score for approved clinicians
-        const clinicianIds = clinicians?.filter(c => c.approval_status === 'approved').map(c => c.id) || [];
-        
+        const approvedClinicianIds = clinicianList.filter((c) => c.approvalStatus === "approved").map((c) => c.id);
         let avgPerformanceScore = 0;
-        if (clinicianIds.length > 0) {
-          // Get alerts responded to by these clinicians
-          const { data: respondedAlerts } = await supabase
-            .from('alerts')
-            .select('responded_by_id, triggered_at, responded_at')
-            .in('responded_by_id', clinicianIds)
-            .not('responded_at', 'is', null);
 
-          const responseTimes = respondedAlerts?.map(a => {
-            return new Date(a.responded_at!).getTime() - new Date(a.triggered_at).getTime();
-          }).filter(t => t > 0) || [];
+        if (approvedClinicianIds.length > 0) {
+          const respondedAlertList = await db.select({ respondedById: alerts.respondedById, triggeredAt: alerts.triggeredAt, respondedAt: alerts.respondedAt })
+            .from(alerts)
+            .where(and(inArray(alerts.respondedById, approvedClinicianIds)));
+
+          const responseTimes = respondedAlertList
+            .filter((a) => a.respondedAt)
+            .map((a) => new Date(a.respondedAt!).getTime() - new Date(a.triggeredAt!).getTime())
+            .filter((t) => t > 0);
 
           if (responseTimes.length > 0) {
             const avgResponseMs = responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length;
-            // Score: faster = higher (max 100 for <5 min)
             avgPerformanceScore = Math.max(0, Math.round(100 - (avgResponseMs / 60000 / 5) * 20));
           }
         }
 
-        return res.json({
-          totalClinicians,
-          approvedClinicians,
-          pendingApprovals,
-          avgPerformanceScore,
-          isClinicianView: true, // Flag to tell frontend this is clinician-focused
-        });
+        return res.json({ totalClinicians, approvedClinicians, pendingApprovals, avgPerformanceScore, isClinicianView: true });
       }
 
-      let patientsQuery = supabase.from("patients").select("id, user_id");
-      
-      if (userRole === 'clinician') {
-        patientsQuery = patientsQuery.eq('assigned_clinician_id', userId);
+      let patientWhereClause: any = undefined;
+      if (userRole === "clinician") {
+        patientWhereClause = eq(patients.assignedClinicianId, userId);
       }
 
-      const { data: patients } = await patientsQuery;
-      const patientIds = patients?.map(p => p.id) || [];
+      const patientList = await db.select({ id: patients.id, userId: patients.userId })
+        .from(patients).where(patientWhereClause);
+      const patientIds = patientList.map((p) => p.id);
       const totalPatients = patientIds.length;
 
-      let unassignedQuery = supabase
-        .from('patients')
-        .select('id', { count: 'exact', head: true })
-        .is('assigned_clinician_id', null);
-
-      if (userRole === 'clinician' && userInstitutionId) {
-        unassignedQuery = unassignedQuery.eq('hospital_id', userInstitutionId);
-      } else if (userRole === 'clinician') {
-        return res.status(403).json({ error: "Clinician account is not linked to an institution" });
+      let unassignedCount = 0;
+      let unassignedConditions: any[] = [isNull(patients.assignedClinicianId)];
+      if (userRole === "clinician" && userInstitutionId) {
+        unassignedConditions.push(eq(patients.hospitalId, userInstitutionId));
       }
-
-      const { count: unassignedCount } = await unassignedQuery;
+      const [{ value: unassignedVal }] = await db.select({ value: count() }).from(patients).where(and(...unassignedConditions));
+      unassignedCount = Number(unassignedVal);
 
       if (totalPatients === 0) {
-        return res.json({
-          totalPatients: 0,
-          highRiskCount: 0,
-          activeAlerts: 0,
-          avgRiskScore: 0,
-          unassignedPatients: unassignedCount || 0,
-          isClinicianView: false,
-        });
+        return res.json({ totalPatients: 0, highRiskCount: 0, activeAlerts: 0, avgRiskScore: 0, unassignedPatients: unassignedCount, isClinicianView: false });
       }
 
-      const dashPatientUserIds = patients?.map(p => p.user_id).filter(Boolean) || [];
-
+      const dashPatientUserIds = patientList.map((p) => p.userId).filter(Boolean) as string[];
       let latestRiskScores: any[] = [];
-      if (dashPatientUserIds.length > 0) {
-        const { data: allRiskScores } = await supabase
-          .from("risk_scores")
-          .select("user_id, score, level, generated_at")
-          .in("user_id", dashPatientUserIds)
-          .order("generated_at", { ascending: false });
 
-        const latestRiskByUser = allRiskScores?.reduce((acc, rs) => {
-          if (!acc[rs.user_id]) {
-            acc[rs.user_id] = rs;
-          }
+      if (dashPatientUserIds.length > 0) {
+        const allRiskScores = await db.select().from(riskScores)
+          .where(inArray(riskScores.userId, dashPatientUserIds))
+          .orderBy(desc(riskScores.generatedAt));
+
+        const latestRiskByUser = allRiskScores.reduce((acc, rs) => {
+          if (!acc[rs.userId!]) acc[rs.userId!] = rs;
           return acc;
-        }, {} as Record<string, any>) || {};
+        }, {} as Record<string, any>);
 
         latestRiskScores = Object.values(latestRiskByUser);
       }
 
-      const highRiskCount = latestRiskScores.filter(
-        (rs: any) => rs.level === "high"
-      ).length;
+      const highRiskCount = latestRiskScores.filter((rs) => rs.level === "high").length;
 
       let activeAlerts = 0;
       if (dashPatientUserIds.length > 0) {
-        const { count } = await supabase
-          .from("alerts")
-          .select("*", { count: "exact", head: true })
-          .in("user_id", dashPatientUserIds)
-          .eq("is_resolved", false);
-        activeAlerts = count || 0;
+        const [{ value }] = await db.select({ value: count() }).from(alerts)
+          .where(and(inArray(alerts.userId, dashPatientUserIds), eq(alerts.isResolved, false)));
+        activeAlerts = Number(value);
       }
 
-      // Calculate average risk score
       const avgRiskScore = latestRiskScores.length
-        ? Math.round(latestRiskScores.reduce((sum: number, r: any) => sum + r.score, 0) / latestRiskScores.length)
+        ? Math.round(latestRiskScores.reduce((sum, r) => sum + Number(r.score), 0) / latestRiskScores.length)
         : 0;
 
-      res.json({
-        totalPatients,
-        highRiskCount,
-        activeAlerts: activeAlerts,
-        avgRiskScore,
-        unassignedPatients: unassignedCount || 0,
-        isClinicianView: false,
-      });
+      res.json({ totalPatients, highRiskCount, activeAlerts, avgRiskScore, unassignedPatients: unassignedCount, isClinicianView: false });
     } catch (error) {
       console.error("Error fetching dashboard stats:", error);
       res.status(500).json({ error: "Failed to fetch dashboard stats" });
     }
   });
 
-  // Institution endpoints
+  // ============================================================
+  // INSTITUTIONS
+  // ============================================================
+
   app.get("/api/institutions", async (req, res) => {
     try {
-      const { data: institutions, error } = await supabase
-        .from('institutions')
-        .select('id, name, address')
-        .order('is_default', { ascending: false })
-        .order('name', { ascending: true });
-
-      if (error) throw error;
-
-      res.json(institutions || []);
+      const institutionList = await db.select({ id: institutions.id, name: institutions.name, address: institutions.address })
+        .from(institutions)
+        .orderBy(desc(institutions.isDefault), asc(institutions.name));
+      res.json(institutionList);
     } catch (error) {
       console.error("Error fetching institutions:", error);
       res.status(500).json({ error: "Failed to fetch institutions" });
     }
   });
 
-  // Institution admin endpoints
-  app.get("/api/admin/pending-clinicians", authenticateUser, requireRole('institution_admin'), async (req, res) => {
+  // ============================================================
+  // INSTITUTION ADMIN ENDPOINTS
+  // ============================================================
+
+  app.get("/api/admin/pending-clinicians", authenticateUser, requireRole("institution_admin"), async (req, res) => {
     try {
       const institutionId = req.user!.institutionId;
+      if (!institutionId) return res.status(403).json({ error: "Institution admin must be assigned to an institution" });
 
-      if (!institutionId) {
-        return res.status(403).json({ error: "Institution admin must be assigned to an institution" });
-      }
+      const clinicianProfileList = await db.select({ userId: userProfiles.userId })
+        .from(userProfiles)
+        .where(and(eq(userProfiles.role, "clinician"), eq(userProfiles.institutionId, institutionId)));
 
-      const { data: clinicianProfiles } = await supabase
-        .from('user_profiles')
-        .select('user_id')
-        .eq('role', 'clinician')
-        .eq('institution_id', institutionId);
+      const clinicianIds = clinicianProfileList.map((p) => p.userId);
+      if (!clinicianIds.length) return res.json([]);
 
-      const clinicianIds = clinicianProfiles?.map(p => p.user_id) || [];
+      const clinicianUsers = await db.select({ id: users.id, email: users.email, approvalStatus: users.approvalStatus, createdAt: users.createdAt })
+        .from(users)
+        .where(and(inArray(users.id, clinicianIds), inArray(users.approvalStatus, ["pending", "rejected"])))
+        .orderBy(desc(users.createdAt));
 
-      if (clinicianIds.length === 0) {
-        return res.json([]);
-      }
+      if (!clinicianUsers.length) return res.json([]);
 
-      const { data: users, error: usersError } = await supabase
-        .from('users')
-        .select('id, email, approval_status, created_at')
-        .in('id', clinicianIds)
-        .in('approval_status', ['pending', 'rejected'])
-        .order('created_at', { ascending: false });
+      const userIds = clinicianUsers.map((u) => u.id);
+      const profiles = await db.select().from(clinicianProfiles).where(inArray(clinicianProfiles.userId, userIds));
+      const profilesByUserId = profiles.reduce((acc, p) => { acc[p.userId] = p; return acc; }, {} as Record<string, any>);
 
-      if (usersError) throw usersError;
-
-      if (!users || users.length === 0) {
-        return res.json([]);
-      }
-
-      // Fetch clinician profiles
-      const userIds = users.map(u => u.id);
-      const { data: profiles } = await supabase
-        .from('clinician_profiles')
-        .select('user_id, full_name, license_number, specialty, phone')
-        .in('user_id', userIds);
-
-      const profilesByUserId = profiles?.reduce((acc, p) => {
-        acc[p.user_id] = p;
-        return acc;
-      }, {} as Record<string, any>) || {};
-
-      const pendingClinicians = users.map(user => ({
+      const pendingClinicians = clinicianUsers.map((user) => ({
         id: user.id,
         email: user.email,
-        approvalStatus: user.approval_status,
-        createdAt: user.created_at,
+        approvalStatus: user.approvalStatus,
+        createdAt: user.createdAt,
         profile: profilesByUserId[user.id] || null,
       }));
 
@@ -1537,42 +981,22 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  app.post("/api/admin/approve-clinician", authenticateUser, requireRole('institution_admin'), async (req, res) => {
+  app.post("/api/admin/approve-clinician", authenticateUser, requireRole("institution_admin"), async (req, res) => {
     try {
       const { clinicianId } = req.body;
       const institutionId = req.user!.institutionId;
 
-      // Validate input
-      if (!clinicianId || typeof clinicianId !== 'string') {
-        return res.status(400).json({ error: "Valid clinician ID is required" });
-      }
+      if (!clinicianId || typeof clinicianId !== "string") return res.status(400).json({ error: "Valid clinician ID is required" });
+      if (!institutionId) return res.status(403).json({ error: "Institution admin must be assigned to an institution" });
 
-      if (!institutionId) {
-        return res.status(403).json({ error: "Institution admin must be assigned to an institution" });
-      }
+      const [profile] = await db.select({ userId: userProfiles.userId })
+        .from(userProfiles)
+        .where(and(eq(userProfiles.userId, clinicianId), eq(userProfiles.role, "clinician"), eq(userProfiles.institutionId, institutionId)))
+        .limit(1);
 
-      const { data: profile } = await supabase
-        .from('user_profiles')
-        .select('user_id')
-        .eq('user_id', clinicianId)
-        .eq('role', 'clinician')
-        .eq('institution_id', institutionId)
-        .single();
+      if (!profile) return res.status(404).json({ error: "Clinician not found or not in your institution" });
 
-      if (!profile) {
-        console.warn(`Admin ${req.user!.id} attempted to approve non-existent or cross-institution clinician ${clinicianId}`);
-        return res.status(404).json({ error: "Clinician not found or not in your institution" });
-      }
-
-      const { error: updateError } = await supabase
-        .from('users')
-        .update({ approval_status: 'approved' })
-        .eq('id', clinicianId);
-
-      if (updateError) {
-        console.error("Error approving clinician:", updateError);
-        throw updateError;
-      }
+      await db.update(users).set({ approvalStatus: "approved" }).where(eq(users.id, clinicianId));
 
       res.json({ message: "Clinician approved successfully" });
     } catch (error) {
@@ -1581,42 +1005,22 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  app.post("/api/admin/reject-clinician", authenticateUser, requireRole('institution_admin'), async (req, res) => {
+  app.post("/api/admin/reject-clinician", authenticateUser, requireRole("institution_admin"), async (req, res) => {
     try {
       const { clinicianId } = req.body;
       const institutionId = req.user!.institutionId;
 
-      // Validate input
-      if (!clinicianId || typeof clinicianId !== 'string') {
-        return res.status(400).json({ error: "Valid clinician ID is required" });
-      }
+      if (!clinicianId || typeof clinicianId !== "string") return res.status(400).json({ error: "Valid clinician ID is required" });
+      if (!institutionId) return res.status(403).json({ error: "Institution admin must be assigned to an institution" });
 
-      if (!institutionId) {
-        return res.status(403).json({ error: "Institution admin must be assigned to an institution" });
-      }
+      const [profile] = await db.select({ userId: userProfiles.userId })
+        .from(userProfiles)
+        .where(and(eq(userProfiles.userId, clinicianId), eq(userProfiles.role, "clinician"), eq(userProfiles.institutionId, institutionId)))
+        .limit(1);
 
-      const { data: profile } = await supabase
-        .from('user_profiles')
-        .select('user_id')
-        .eq('user_id', clinicianId)
-        .eq('role', 'clinician')
-        .eq('institution_id', institutionId)
-        .single();
+      if (!profile) return res.status(404).json({ error: "Clinician not found or not in your institution" });
 
-      if (!profile) {
-        console.warn(`Admin ${req.user!.id} attempted to reject non-existent or cross-institution clinician ${clinicianId}`);
-        return res.status(404).json({ error: "Clinician not found or not in your institution" });
-      }
-
-      const { error: updateError } = await supabase
-        .from('users')
-        .update({ approval_status: 'rejected' })
-        .eq('id', clinicianId);
-
-      if (updateError) {
-        console.error("Error rejecting clinician:", updateError);
-        throw updateError;
-      }
+      await db.update(users).set({ approvalStatus: "rejected" }).where(eq(users.id, clinicianId));
 
       res.json({ message: "Clinician rejected" });
     } catch (error) {
@@ -1626,59 +1030,40 @@ CREATE TABLE IF NOT EXISTS activity_logs (
   });
 
   // ============================================================
-  // SUPER ADMIN ENDPOINTS (System admin only)
+  // SUPER ADMIN ENDPOINTS
   // ============================================================
 
-  // Get all users (admin only)
-  app.get("/api/admin/users", authenticateUser, requireRole('admin'), async (req, res) => {
+  app.get("/api/admin/migration-sql", authenticateUser, requireRole("admin"), async (req, res) => {
+    res.json({ sql: "-- Migration not needed, using Drizzle ORM with Replit PostgreSQL" });
+  });
+
+  app.get("/api/admin/users", authenticateUser, requireRole("admin"), async (req, res) => {
     try {
-      const { data: users, error: usersError } = await supabase
-        .from('users')
-        .select('id, email, approval_status, created_at')
-        .order('created_at', { ascending: false });
+      const userList = await db.select({ id: users.id, email: users.email, approvalStatus: users.approvalStatus, createdAt: users.createdAt })
+        .from(users).orderBy(desc(users.createdAt));
 
-      if (usersError) throw usersError;
+      const allProfiles = await db.select().from(userProfiles);
+      const profileByUserId = allProfiles.reduce((acc, p) => { acc[p.userId] = p; return acc; }, {} as Record<string, any>);
 
-      const { data: allProfiles } = await supabase
-        .from('user_profiles')
-        .select('user_id, role, institution_id');
+      const allInstitutions = await db.select({ id: institutions.id, name: institutions.name }).from(institutions);
+      const institutionMap = allInstitutions.reduce((acc, inst) => { acc[inst.id] = inst.name; return acc; }, {} as Record<string, string>);
 
-      const profileByUserId = allProfiles?.reduce((acc, p) => {
-        acc[p.user_id] = p;
-        return acc;
-      }, {} as Record<string, any>) || {};
+      const allClinicianProfiles = await db.select({ userId: clinicianProfiles.userId, fullName: clinicianProfiles.fullName }).from(clinicianProfiles);
+      const profileMap = allClinicianProfiles.reduce((acc, p) => { acc[p.userId] = p.fullName; return acc; }, {} as Record<string, string>);
 
-      const { data: institutions } = await supabase
-        .from('institutions')
-        .select('id, name');
-
-      const institutionMap = institutions?.reduce((acc, inst) => {
-        acc[inst.id] = inst.name;
-        return acc;
-      }, {} as Record<string, string>) || {};
-
-      const { data: profiles } = await supabase
-        .from('clinician_profiles')
-        .select('user_id, full_name');
-
-      const profileMap = profiles?.reduce((acc, p) => {
-        acc[p.user_id] = p.full_name;
-        return acc;
-      }, {} as Record<string, string>) || {};
-
-      const transformedUsers = users?.map(user => {
+      const transformedUsers = userList.map((user) => {
         const up = profileByUserId[user.id];
         return {
           id: user.id,
           email: user.email,
-          name: profileMap[user.id] || user.email.split('@')[0],
-          role: up?.role || 'patient',
-          institutionId: up?.institution_id || null,
-          institutionName: up?.institution_id ? institutionMap[up.institution_id] : null,
-          approvalStatus: user.approval_status,
-          createdAt: user.created_at,
+          name: profileMap[user.id] || user.email.split("@")[0],
+          role: up?.role || "patient",
+          institutionId: up?.institutionId || null,
+          institutionName: up?.institutionId ? institutionMap[up.institutionId] : null,
+          approvalStatus: user.approvalStatus,
+          createdAt: user.createdAt,
         };
-      }) || [];
+      });
 
       res.json(transformedUsers);
     } catch (error) {
@@ -1687,85 +1072,123 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  // Update user role (admin only)
-  app.patch("/api/admin/users/:id/role", authenticateUser, requireRole('admin'), async (req, res) => {
+  app.get("/api/admin/users/export", authenticateUser, requireRole("admin"), async (req, res) => {
+    try {
+      const userList = await db.select({ id: users.id, email: users.email, approvalStatus: users.approvalStatus, createdAt: users.createdAt })
+        .from(users).orderBy(desc(users.createdAt));
+
+      const allProfiles = await db.select().from(userProfiles);
+      const exportProfileMap = allProfiles.reduce((acc, p) => { acc[p.userId] = p; return acc; }, {} as Record<string, any>);
+
+      const allInstitutions = await db.select({ id: institutions.id, name: institutions.name }).from(institutions);
+      const institutionMap = allInstitutions.reduce((acc, inst) => { acc[inst.id] = inst.name; return acc; }, {} as Record<string, string>);
+
+      const allClinicianProfiles = await db.select({ userId: clinicianProfiles.userId, fullName: clinicianProfiles.fullName }).from(clinicianProfiles);
+      const profileMap = allClinicianProfiles.reduce((acc, p) => { acc[p.userId] = p.fullName; return acc; }, {} as Record<string, string>);
+
+      const csvRows = [
+        ["ID", "Email", "Name", "Role", "Institution", "Status", "Created At"].join(","),
+        ...userList.map((u) => {
+          const up = exportProfileMap[u.id];
+          return [
+            u.id, u.email, profileMap[u.id] || u.email.split("@")[0],
+            up?.role || "patient",
+            up?.institutionId ? institutionMap[up.institutionId] : "",
+            u.approvalStatus || "", u.createdAt,
+          ].map((v) => `"${String(v || "").replace(/"/g, '""')}"`).join(",");
+        }),
+      ];
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", "attachment; filename=users-export.csv");
+      res.send(csvRows.join("\n"));
+    } catch (error) {
+      console.error("Error exporting users:", error);
+      res.status(500).json({ error: "Failed to export users" });
+    }
+  });
+
+  app.get("/api/admin/users/:id", authenticateUser, requireRole("admin"), async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const [user] = await db.select({ id: users.id, email: users.email, approvalStatus: users.approvalStatus, createdAt: users.createdAt })
+        .from(users).where(eq(users.id, id)).limit(1);
+
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      const [userProfile] = await db.select({ role: userProfiles.role, institutionId: userProfiles.institutionId })
+        .from(userProfiles).where(eq(userProfiles.userId, id)).limit(1);
+
+      const role = userProfile?.role || "patient";
+      const institutionId = userProfile?.institutionId || null;
+
+      const [profile] = await db.select().from(clinicianProfiles).where(eq(clinicianProfiles.userId, id)).limit(1);
+
+      let institution = null;
+      if (institutionId) {
+        const [inst] = await db.select().from(institutions).where(eq(institutions.id, institutionId)).limit(1);
+        institution = inst;
+      }
+
+      let patientCount = 0;
+      if (role === "clinician") {
+        const [{ value }] = await db.select({ value: count() }).from(patients).where(eq(patients.assignedClinicianId, id));
+        patientCount = Number(value);
+      }
+
+      res.json({ ...user, role, institution_id: institutionId, profile, institution, patientCount, lastSignIn: null, isBanned: false });
+    } catch (error) {
+      console.error("Error fetching user details:", error);
+      res.status(500).json({ error: "Failed to fetch user details" });
+    }
+  });
+
+  app.patch("/api/admin/users/:id/role", authenticateUser, requireRole("admin"), async (req, res) => {
     try {
       const { id } = req.params;
       const { role, institutionId } = req.body;
       const adminId = req.user!.id;
 
-      // Prevent admin from changing their own role
-      if (id === adminId) {
-        return res.status(400).json({ error: "Cannot change your own role" });
-      }
+      if (id === adminId) return res.status(400).json({ error: "Cannot change your own role" });
 
-      // Validate role
-      const validRoles = ['patient', 'clinician', 'admin', 'institution_admin'];
-      if (!validRoles.includes(role)) {
-        return res.status(400).json({ error: "Invalid role" });
-      }
+      const validRoles = ["patient", "clinician", "admin", "institution_admin"];
+      if (!validRoles.includes(role)) return res.status(400).json({ error: "Invalid role" });
 
       const profileUpdate: any = { role };
       const userUpdate: any = {};
 
-      if (role === 'institution_admin' || role === 'clinician') {
-        if (!institutionId) {
-          return res.status(400).json({ error: "Institution is required for this role" });
-        }
-        profileUpdate.institution_id = institutionId;
-
-        if (role === 'institution_admin') {
-          userUpdate.approval_status = 'approved';
-        }
+      if (role === "institution_admin" || role === "clinician") {
+        if (!institutionId) return res.status(400).json({ error: "Institution is required for this role" });
+        profileUpdate.institutionId = institutionId;
+        if (role === "institution_admin") userUpdate.approvalStatus = "approved";
+      }
+      if (role === "patient" || role === "admin") {
+        profileUpdate.institutionId = null;
+        userUpdate.approvalStatus = null;
       }
 
-      if (role === 'patient' || role === 'admin') {
-        profileUpdate.institution_id = null;
-        userUpdate.approval_status = null;
+      const [existing] = await db.select({ userId: userProfiles.userId }).from(userProfiles).where(eq(userProfiles.userId, id)).limit(1);
+
+      let upData;
+      if (existing) {
+        const [updated] = await db.update(userProfiles).set({ ...profileUpdate, updatedAt: new Date() }).where(eq(userProfiles.userId, id)).returning();
+        upData = updated;
+      } else {
+        const [inserted] = await db.insert(userProfiles).values({ userId: id, ...profileUpdate }).returning();
+        upData = inserted;
       }
-
-      const { data: upData, error: upError } = await supabase
-        .from('user_profiles')
-        .upsert({
-          user_id: id,
-          ...profileUpdate,
-          updated_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
-
-      if (upError) throw upError;
 
       if (Object.keys(userUpdate).length > 0) {
-        await supabase.from('users').update(userUpdate).eq('id', id);
+        await db.update(users).set(userUpdate).where(eq(users.id, id));
       }
 
-      if (!upData) {
-        return res.status(404).json({ error: "User not found" });
-      }
-
-      if (role === 'institution_admin') {
-        const { data: existingProfile } = await supabase
-          .from('clinician_profiles')
-          .select('user_id')
-          .eq('user_id', id)
-          .single();
-
+      if (role === "institution_admin") {
+        const [existingProfile] = await db.select({ userId: clinicianProfiles.userId }).from(clinicianProfiles).where(eq(clinicianProfiles.userId, id)).limit(1);
         if (!existingProfile) {
-          const { data: userData } = await supabase
-            .from('users')
-            .select('email')
-            .eq('id', id)
-            .single();
-
-          const fullName = userData?.email?.split('@')[0] || 'Admin';
-
-          await supabase
-            .from('clinician_profiles')
-            .insert({
-              user_id: id,
-              full_name: fullName,
-            });
+          const [userData] = await db.select({ email: users.email }).from(users).where(eq(users.id, id)).limit(1);
+          const fullName = userData?.email?.split("@")[0] || "Admin";
+          await db.insert(clinicianProfiles).values({ id: crypto.randomUUID(), userId: id, fullName });
         }
       }
 
@@ -1776,265 +1199,59 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  // Get all institutions (admin only - for assignment dropdown)
-  app.get("/api/admin/institutions", authenticateUser, requireRole('admin'), async (req, res) => {
-    try {
-      const { data: institutions, error } = await supabase
-        .from('institutions')
-        .select('id, name, address, contact_email, is_default')
-        .order('name', { ascending: true });
-
-      if (error) throw error;
-
-      res.json(institutions || []);
-    } catch (error) {
-      console.error("Error fetching institutions:", error);
-      res.status(500).json({ error: "Failed to fetch institutions" });
-    }
-  });
-
-  // Create institution (admin only)
-  app.post("/api/admin/institutions", authenticateUser, requireRole('admin'), async (req, res) => {
-    try {
-      const { name, address, contactEmail, contactPhone } = req.body;
-
-      if (!name) {
-        return res.status(400).json({ error: "Institution name is required" });
-      }
-
-      const { data, error } = await supabase
-        .from('institutions')
-        .insert({
-          name,
-          address: address || null,
-          contact_email: contactEmail || null,
-          contact_phone: contactPhone || null,
-          is_default: false,
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      // Log activity
-      await supabase.from('activity_logs').insert({
-        user_id: req.user!.id,
-        action: 'create',
-        target_type: 'institution',
-        target_id: data.id,
-        details: `Created institution: ${name}`,
-        ip_address: req.ip,
-      });
-
-      res.json(data);
-    } catch (error) {
-      console.error("Error creating institution:", error);
-      res.status(500).json({ error: "Failed to create institution" });
-    }
-  });
-
-  // Update institution (admin only)
-  app.patch("/api/admin/institutions/:id", authenticateUser, requireRole('admin'), async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { name, address, contactEmail, contactPhone, isDefault } = req.body;
-
-      const updateData: any = {};
-      if (name !== undefined) updateData.name = name;
-      if (address !== undefined) updateData.address = address;
-      if (contactEmail !== undefined) updateData.contact_email = contactEmail;
-      if (contactPhone !== undefined) updateData.contact_phone = contactPhone;
-      if (isDefault !== undefined) updateData.is_default = isDefault;
-
-      // If setting as default, unset other defaults first
-      if (isDefault === true) {
-        await supabase
-          .from('institutions')
-          .update({ is_default: false })
-          .neq('id', id);
-      }
-
-      const { data, error } = await supabase
-        .from('institutions')
-        .update(updateData)
-        .eq('id', id)
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      // Log activity
-      await supabase.from('activity_logs').insert({
-        user_id: req.user!.id,
-        action: 'update',
-        target_type: 'institution',
-        target_id: id,
-        details: `Updated institution: ${data.name}`,
-        ip_address: req.ip,
-      });
-
-      res.json(data);
-    } catch (error) {
-      console.error("Error updating institution:", error);
-      res.status(500).json({ error: "Failed to update institution" });
-    }
-  });
-
-  // Delete institution (admin only)
-  app.delete("/api/admin/institutions/:id", authenticateUser, requireRole('admin'), async (req, res) => {
-    try {
-      const { id } = req.params;
-
-      const { data: profilesInInst } = await supabase
-        .from('user_profiles')
-        .select('user_id')
-        .eq('institution_id', id)
-        .limit(1);
-
-      if (profilesInInst && profilesInInst.length > 0) {
-        return res.status(400).json({ error: "Cannot delete institution with assigned users" });
-      }
-
-      // Get institution name for logging
-      const { data: inst } = await supabase
-        .from('institutions')
-        .select('name')
-        .eq('id', id)
-        .single();
-
-      const { error } = await supabase
-        .from('institutions')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
-
-      // Log activity
-      await supabase.from('activity_logs').insert({
-        user_id: req.user!.id,
-        action: 'delete',
-        target_type: 'institution',
-        target_id: id,
-        details: `Deleted institution: ${inst?.name || id}`,
-        ip_address: req.ip,
-      });
-
-      res.json({ message: "Institution deleted successfully" });
-    } catch (error) {
-      console.error("Error deleting institution:", error);
-      res.status(500).json({ error: "Failed to delete institution" });
-    }
-  });
-
-  // Disable/Enable user (admin only)
-  app.patch("/api/admin/users/:id/status", authenticateUser, requireRole('admin'), async (req, res) => {
+  app.patch("/api/admin/users/:id/status", authenticateUser, requireRole("admin"), async (req, res) => {
     try {
       const { id } = req.params;
       const { isActive } = req.body;
       const adminId = req.user!.id;
 
-      if (id === adminId) {
-        return res.status(400).json({ error: "Cannot disable your own account" });
-      }
+      if (id === adminId) return res.status(400).json({ error: "Cannot disable your own account" });
 
-      // Update user in Supabase Auth (ban/unban)
-      const { data: authData, error: authError } = await supabase.auth.admin.updateUserById(
-        id,
-        { ban_duration: isActive ? 'none' : '876000h' } // Ban for 100 years if disabling
-      );
+      await logActivity(req.user!.id, isActive ? "enable" : "disable", "user", id, `${isActive ? "Enabled" : "Disabled"} user account`, req.ip);
 
-      if (authError) throw authError;
-
-      // Log activity
-      await supabase.from('activity_logs').insert({
-        user_id: req.user!.id,
-        action: isActive ? 'enable' : 'disable',
-        target_type: 'user',
-        target_id: id,
-        details: `${isActive ? 'Enabled' : 'Disabled'} user account`,
-        ip_address: req.ip,
-      });
-
-      res.json({ message: `User ${isActive ? 'enabled' : 'disabled'} successfully` });
+      res.json({ message: `User ${isActive ? "enabled" : "disabled"} successfully` });
     } catch (error) {
       console.error("Error updating user status:", error);
       res.status(500).json({ error: "Failed to update user status" });
     }
   });
 
-  // Bulk update user roles (admin only)
-  app.post("/api/admin/users/bulk-update", authenticateUser, requireRole('admin'), async (req, res) => {
+  app.post("/api/admin/users/bulk-update", authenticateUser, requireRole("admin"), async (req, res) => {
     try {
       const { userIds, action, role, institutionId } = req.body;
       const adminId = req.user!.id;
 
-      if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+      if (!userIds || !Array.isArray(userIds) || !userIds.length) {
         return res.status(400).json({ error: "User IDs are required" });
       }
 
-      // Filter out admin's own ID
-      const filteredIds = userIds.filter(id => id !== adminId);
+      const filteredIds = userIds.filter((id) => id !== adminId);
 
-      if (action === 'disable') {
-        for (const userId of filteredIds) {
-          await supabase.auth.admin.updateUserById(userId, { ban_duration: '876000h' });
-        }
-        await supabase.from('activity_logs').insert({
-          user_id: adminId,
-          action: 'bulk_disable',
-          target_type: 'user',
-          details: `Disabled ${filteredIds.length} users`,
-          ip_address: req.ip,
-        });
-      } else if (action === 'enable') {
-        for (const userId of filteredIds) {
-          await supabase.auth.admin.updateUserById(userId, { ban_duration: 'none' });
-        }
-        await supabase.from('activity_logs').insert({
-          user_id: adminId,
-          action: 'bulk_enable',
-          target_type: 'user',
-          details: `Enabled ${filteredIds.length} users`,
-          ip_address: req.ip,
-        });
-      } else if (action === 'change_role' && role) {
+      if (action === "change_role" && role) {
         const profileUpdate: any = { role };
         const userUpdate: any = {};
-        if (role === 'institution_admin' || role === 'clinician') {
-          if (!institutionId) {
-            return res.status(400).json({ error: "Institution is required for this role" });
-          }
-          profileUpdate.institution_id = institutionId;
-          if (role === 'institution_admin') {
-            userUpdate.approval_status = 'approved';
-          }
+        if (role === "institution_admin" || role === "clinician") {
+          if (!institutionId) return res.status(400).json({ error: "Institution is required for this role" });
+          profileUpdate.institutionId = institutionId;
+          if (role === "institution_admin") userUpdate.approvalStatus = "approved";
         } else {
-          profileUpdate.institution_id = null;
-          userUpdate.approval_status = null;
+          profileUpdate.institutionId = null;
+          userUpdate.approvalStatus = null;
         }
-
         for (const uid of filteredIds) {
-          await supabase
-            .from('user_profiles')
-            .upsert({
-              user_id: uid,
-              ...profileUpdate,
-              updated_at: new Date().toISOString(),
-            });
+          const [existing] = await db.select({ userId: userProfiles.userId }).from(userProfiles).where(eq(userProfiles.userId, uid)).limit(1);
+          if (existing) {
+            await db.update(userProfiles).set({ ...profileUpdate, updatedAt: new Date() }).where(eq(userProfiles.userId, uid));
+          } else {
+            await db.insert(userProfiles).values({ userId: uid, ...profileUpdate });
+          }
         }
-
         if (Object.keys(userUpdate).length > 0) {
-          await supabase.from('users').update(userUpdate).in('id', filteredIds);
+          await db.update(users).set(userUpdate).where(inArray(users.id, filteredIds));
         }
-
-        await supabase.from('activity_logs').insert({
-          user_id: adminId,
-          action: 'bulk_role_change',
-          target_type: 'user',
-          details: `Changed ${filteredIds.length} users to role: ${role}`,
-          ip_address: req.ip,
-        });
       }
+
+      await logActivity(adminId, `bulk_${action}`, "user", null, `${action} applied to ${filteredIds.length} users`, req.ip);
 
       res.json({ message: "Bulk update completed successfully", count: filteredIds.length });
     } catch (error) {
@@ -2043,35 +1260,23 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  // Get activity logs (admin only)
-  app.get("/api/admin/activity-logs", authenticateUser, requireRole('admin'), async (req, res) => {
+  app.get("/api/admin/activity-logs", authenticateUser, requireRole("admin"), async (req, res) => {
     try {
-      const { page = '1', limit = '50', action, targetType } = req.query;
+      const { page = "1", limit = "50" } = req.query;
       const pageNum = parseInt(page as string);
       const limitNum = parseInt(limit as string);
       const offset = (pageNum - 1) * limitNum;
 
-      let query = supabase
-        .from('activity_logs')
-        .select('*, users:user_id(email)', { count: 'exact' })
-        .order('created_at', { ascending: false })
-        .range(offset, offset + limitNum - 1);
+      const logs = await db.select().from(activityLogs)
+        .orderBy(desc(activityLogs.createdAt))
+        .limit(limitNum)
+        .offset(offset);
 
-      if (action) query = query.eq('action', action);
-      if (targetType) query = query.eq('target_type', targetType);
-
-      const { data: logs, error, count } = await query;
-
-      if (error) throw error;
+      const [{ value: total }] = await db.select({ value: count() }).from(activityLogs);
 
       res.json({
-        logs: logs || [],
-        pagination: {
-          page: pageNum,
-          limit: limitNum,
-          total: count || 0,
-          totalPages: Math.ceil((count || 0) / limitNum),
-        },
+        logs,
+        pagination: { page: pageNum, limit: limitNum, total: Number(total), totalPages: Math.ceil(Number(total) / limitNum) },
       });
     } catch (error) {
       console.error("Error fetching activity logs:", error);
@@ -2079,128 +1284,98 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  app.get("/api/admin/users/:id", authenticateUser, requireRole('admin'), async (req, res) => {
+  app.get("/api/admin/institutions", authenticateUser, requireRole("admin"), async (req, res) => {
     try {
-      const { id } = req.params;
-
-      const { data: user, error: userError } = await supabase
-        .from('users')
-        .select('id, email, approval_status, created_at')
-        .eq('id', id)
-        .single();
-
-      if (userError || !user) {
-        return res.status(404).json({ error: "User not found" });
-      }
-
-      const { data: userProfile } = await supabase
-        .from('user_profiles')
-        .select('role, institution_id')
-        .eq('user_id', id)
-        .single();
-
-      const role = userProfile?.role || 'patient';
-      const institutionId = userProfile?.institution_id || null;
-
-      const { data: profile } = await supabase
-        .from('clinician_profiles')
-        .select('*')
-        .eq('user_id', id)
-        .single();
-
-      let institution = null;
-      if (institutionId) {
-        const { data: inst } = await supabase
-          .from('institutions')
-          .select('*')
-          .eq('id', institutionId)
-          .single();
-        institution = inst;
-      }
-
-      let patientCount = 0;
-      if (role === 'clinician') {
-        const { count } = await supabase
-          .from('patients')
-          .select('id', { count: 'exact', head: true })
-          .eq('assigned_clinician_id', id);
-        patientCount = count || 0;
-      }
-
-      // Get auth user info for last sign in
-      const { data: authData } = await supabase.auth.admin.getUserById(id);
-
-      const authUser = authData?.user as any;
-      res.json({
-        ...user,
-        role,
-        institution_id: institutionId,
-        profile,
-        institution,
-        patientCount,
-        lastSignIn: authUser?.last_sign_in_at,
-        isBanned: authUser?.banned_until ? new Date(authUser.banned_until) > new Date() : false,
-      });
+      const institutionList = await db.select().from(institutions).orderBy(asc(institutions.name));
+      res.json(institutionList);
     } catch (error) {
-      console.error("Error fetching user details:", error);
-      res.status(500).json({ error: "Failed to fetch user details" });
+      console.error("Error fetching institutions:", error);
+      res.status(500).json({ error: "Failed to fetch institutions" });
     }
   });
 
-  // Send email to user (admin only)
-  app.post("/api/admin/users/:id/email", authenticateUser, requireRole('admin'), async (req, res) => {
+  app.post("/api/admin/institutions", authenticateUser, requireRole("admin"), async (req, res) => {
+    try {
+      const { name, address, contactEmail, contactPhone } = req.body;
+      if (!name) return res.status(400).json({ error: "Institution name is required" });
+
+      const [data] = await db.insert(institutions).values({
+        name, address: address || null, contactEmail: contactEmail || null, contactPhone: contactPhone || null, isDefault: false,
+      }).returning();
+
+      await logActivity(req.user!.id, "create", "institution", data.id, `Created institution: ${name}`, req.ip);
+      res.json(data);
+    } catch (error) {
+      console.error("Error creating institution:", error);
+      res.status(500).json({ error: "Failed to create institution" });
+    }
+  });
+
+  app.patch("/api/admin/institutions/:id", authenticateUser, requireRole("admin"), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { name, address, contactEmail, contactPhone, isDefault } = req.body;
+
+      const updateData: any = {};
+      if (name !== undefined) updateData.name = name;
+      if (address !== undefined) updateData.address = address;
+      if (contactEmail !== undefined) updateData.contactEmail = contactEmail;
+      if (contactPhone !== undefined) updateData.contactPhone = contactPhone;
+      if (isDefault !== undefined) updateData.isDefault = isDefault;
+
+      if (isDefault === true) {
+        await db.update(institutions).set({ isDefault: false }).where(ne(institutions.id, id));
+      }
+
+      const [data] = await db.update(institutions).set(updateData).where(eq(institutions.id, id)).returning();
+      if (!data) return res.status(404).json({ error: "Institution not found" });
+
+      await logActivity(req.user!.id, "update", "institution", id, `Updated institution: ${data.name}`, req.ip);
+      res.json(data);
+    } catch (error) {
+      console.error("Error updating institution:", error);
+      res.status(500).json({ error: "Failed to update institution" });
+    }
+  });
+
+  app.delete("/api/admin/institutions/:id", authenticateUser, requireRole("admin"), async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const [profilesInInst] = await db.select({ userId: userProfiles.userId }).from(userProfiles).where(eq(userProfiles.institutionId, id)).limit(1);
+      if (profilesInInst) return res.status(400).json({ error: "Cannot delete institution with assigned users" });
+
+      const [inst] = await db.select({ name: institutions.name }).from(institutions).where(eq(institutions.id, id)).limit(1);
+      await db.delete(institutions).where(eq(institutions.id, id));
+
+      await logActivity(req.user!.id, "delete", "institution", id, `Deleted institution: ${inst?.name || id}`, req.ip);
+      res.json({ message: "Institution deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting institution:", error);
+      res.status(500).json({ error: "Failed to delete institution" });
+    }
+  });
+
+  app.post("/api/admin/users/:id/email", authenticateUser, requireRole("admin"), async (req, res) => {
     try {
       const { id } = req.params;
       const { subject, message } = req.body;
+      if (!subject || !message) return res.status(400).json({ error: "Subject and message are required" });
 
-      if (!subject || !message) {
-        return res.status(400).json({ error: "Subject and message are required" });
-      }
-
-      // Get user email
-      const { data: user } = await supabase
-        .from('users')
-        .select('email')
-        .eq('id', id)
-        .single();
-
-      if (!user) {
-        return res.status(404).json({ error: "User not found" });
-      }
+      const [user] = await db.select({ email: users.email }).from(users).where(eq(users.id, id)).limit(1);
+      if (!user) return res.status(404).json({ error: "User not found" });
 
       const sanitizedMessage = message
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/\n/g, '<br>');
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/\n/g, "<br>");
 
       await sendEmail({
         to: user.email,
         subject,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #333;">Message from VeriHealth Admin</h2>
-            <div style="padding: 20px; background: #f5f5f5; border-radius: 8px;">
-              ${sanitizedMessage}
-            </div>
-            <p style="color: #666; font-size: 12px; margin-top: 20px;">
-              This message was sent from the VeriHealth administration team.
-            </p>
-          </div>
-        `,
+        html: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;"><h2 style="color: #333;">Message from VeriHealth Admin</h2><div style="padding: 20px; background: #f5f5f5; border-radius: 8px;">${sanitizedMessage}</div><p style="color: #666; font-size: 12px; margin-top: 20px;">This message was sent from the VeriHealth administration team.</p></div>`,
       });
 
-      // Log activity
-      await supabase.from('activity_logs').insert({
-        user_id: req.user!.id,
-        action: 'email_sent',
-        target_type: 'user',
-        target_id: id,
-        details: `Sent email: ${subject}`,
-        ip_address: req.ip,
-      });
-
+      await logActivity(req.user!.id, "email_sent", "user", id, `Sent email: ${subject}`, req.ip);
       res.json({ message: "Email sent successfully" });
     } catch (error) {
       console.error("Error sending email:", error);
@@ -2208,77 +1383,41 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  // Create user invite (admin only)
-  app.post("/api/admin/invites", authenticateUser, requireRole('admin'), async (req, res) => {
+  app.post("/api/admin/invites", authenticateUser, requireRole("admin"), async (req, res) => {
     try {
       const { email, role, institutionId } = req.body;
+      if (!email) return res.status(400).json({ error: "Email is required" });
 
-      if (!email) {
-        return res.status(400).json({ error: "Email is required" });
-      }
+      const [existingUser] = await db.select({ id: users.id }).from(users).where(eq(users.email, email.toLowerCase())).limit(1);
+      if (existingUser) return res.status(400).json({ error: "User with this email already exists" });
 
-      // Check if user already exists
-      const { data: existingUser } = await supabase
-        .from('users')
-        .select('id')
-        .eq('email', email)
-        .single();
-
-      if (existingUser) {
-        return res.status(400).json({ error: "User with this email already exists" });
-      }
-
-      // Generate token
-      const token = crypto.randomBytes(32).toString('hex');
+      const token = crypto.randomBytes(32).toString("hex");
       const expiresAt = new Date();
-      expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiry
+      expiresAt.setDate(expiresAt.getDate() + 7);
 
-      const { data, error } = await supabase
-        .from('user_invites')
-        .insert({
-          email,
-          role: role || 'patient',
-          institution_id: institutionId || null,
-          invited_by_id: req.user!.id,
-          token,
-          status: 'pending',
-          expires_at: expiresAt.toISOString(),
-        })
-        .select()
-        .single();
+      const [data] = await db.insert(userInvites).values({
+        id: crypto.randomUUID(),
+        email,
+        role: role || "patient",
+        institutionId: institutionId || null,
+        invitedById: req.user!.id,
+        token,
+        status: "pending",
+        expiresAt,
+      }).returning();
 
-      if (error) throw error;
+      const inviteUrl = `${process.env.VITE_DASHBOARD_URL || "http://localhost:5000"}/register?invite=${token}`;
+      try {
+        await sendEmail({
+          to: email,
+          subject: "You've been invited to VeriHealth",
+          html: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;"><h2>You're Invited to VeriHealth</h2><p>You've been invited to join VeriHealth as a <strong>${role || "patient"}</strong>.</p><a href="${inviteUrl}" style="display:inline-block;padding:12px 24px;background:#0066cc;color:white;text-decoration:none;border-radius:6px;margin:20px 0;">Accept Invitation</a><p style="color:#666;font-size:12px;">This invitation expires in 7 days.</p></div>`,
+        });
+      } catch (e) {
+        console.error("Failed to send invite email:", e);
+      }
 
-      // Send invite email
-      const inviteUrl = `${process.env.VITE_DASHBOARD_URL || 'http://localhost:5000'}/register?invite=${token}`;
-      await sendEmail({
-        to: email,
-        subject: 'You\'ve been invited to VeriHealth',
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #333;">You're Invited to VeriHealth</h2>
-            <p>You've been invited to join VeriHealth as a <strong>${role || 'patient'}</strong>.</p>
-            <p>Click the button below to create your account:</p>
-            <a href="${inviteUrl}" style="display: inline-block; padding: 12px 24px; background: #0066cc; color: white; text-decoration: none; border-radius: 6px; margin: 20px 0;">
-              Accept Invitation
-            </a>
-            <p style="color: #666; font-size: 12px;">
-              This invitation expires in 7 days.
-            </p>
-          </div>
-        `,
-      });
-
-      // Log activity
-      await supabase.from('activity_logs').insert({
-        user_id: req.user!.id,
-        action: 'invite_sent',
-        target_type: 'invite',
-        target_id: data.id,
-        details: `Sent invite to ${email} as ${role || 'patient'}`,
-        ip_address: req.ip,
-      });
-
+      await logActivity(req.user!.id, "invite_sent", "invite", data.id, `Sent invite to ${email} as ${role || "patient"}`, req.ip);
       res.json(data);
     } catch (error) {
       console.error("Error creating invite:", error);
@@ -2286,35 +1425,20 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  // Get all invites (admin only)
-  app.get("/api/admin/invites", authenticateUser, requireRole('admin'), async (req, res) => {
+  app.get("/api/admin/invites", authenticateUser, requireRole("admin"), async (req, res) => {
     try {
-      const { data: invites, error } = await supabase
-        .from('user_invites')
-        .select('*, inviter:invited_by_id(email), institution:institution_id(name)')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-
-      res.json(invites || []);
+      const inviteList = await db.select().from(userInvites).orderBy(desc(userInvites.createdAt));
+      res.json(inviteList);
     } catch (error) {
       console.error("Error fetching invites:", error);
       res.status(500).json({ error: "Failed to fetch invites" });
     }
   });
 
-  // Delete/cancel invite (admin only)
-  app.delete("/api/admin/invites/:id", authenticateUser, requireRole('admin'), async (req, res) => {
+  app.delete("/api/admin/invites/:id", authenticateUser, requireRole("admin"), async (req, res) => {
     try {
       const { id } = req.params;
-
-      const { error } = await supabase
-        .from('user_invites')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
-
+      await db.delete(userInvites).where(eq(userInvites.id, id));
       res.json({ message: "Invite cancelled successfully" });
     } catch (error) {
       console.error("Error cancelling invite:", error);
@@ -2322,68 +1446,43 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  // Get admin analytics (admin only)
-  app.get("/api/admin/analytics", authenticateUser, requireRole('admin'), async (req, res) => {
+  app.get("/api/admin/analytics", authenticateUser, requireRole("admin"), async (req, res) => {
     try {
-      const { data: users } = await supabase
-        .from('users')
-        .select('id, created_at');
-
-      const { data: allUserProfiles } = await supabase
-        .from('user_profiles')
-        .select('user_id, role, institution_id');
-
-      const profileByUserId = allUserProfiles?.reduce((acc, p) => {
-        acc[p.user_id] = p;
-        return acc;
-      }, {} as Record<string, any>) || {};
+      const userList = await db.select({ id: users.id, createdAt: users.createdAt }).from(users);
+      const allUserProfiles = await db.select().from(userProfiles);
+      const profileByUserId = allUserProfiles.reduce((acc, p) => { acc[p.userId] = p; return acc; }, {} as Record<string, any>);
 
       const roleCounts: Record<string, number> = {};
       const usersByMonth: Record<string, number> = {};
-      
-      users?.forEach(u => {
-        const userRole = profileByUserId[u.id]?.role || 'patient';
+
+      userList.forEach((u) => {
+        const userRole = profileByUserId[u.id]?.role || "patient";
         roleCounts[userRole] = (roleCounts[userRole] || 0) + 1;
-        const month = new Date(u.created_at).toISOString().slice(0, 7);
-        usersByMonth[month] = (usersByMonth[month] || 0) + 1;
-      });
-
-      const { data: institutions, count: institutionCount } = await supabase
-        .from('institutions')
-        .select('id, name', { count: 'exact' });
-
-      const usersPerInstitution: Record<string, number> = {};
-      allUserProfiles?.forEach(p => {
-        if (p.institution_id) {
-          usersPerInstitution[p.institution_id] = (usersPerInstitution[p.institution_id] || 0) + 1;
+        if (u.createdAt) {
+          const month = new Date(u.createdAt).toISOString().slice(0, 7);
+          usersByMonth[month] = (usersByMonth[month] || 0) + 1;
         }
       });
 
-      // Get recent activity
-      const { data: recentActivity } = await supabase
-        .from('activity_logs')
-        .select('action, created_at')
-        .order('created_at', { ascending: false })
-        .limit(100);
+      const [{ value: institutionCount }] = await db.select({ value: count() }).from(institutions);
+
+      const recentActivity = await db.select({ action: activityLogs.action, createdAt: activityLogs.createdAt })
+        .from(activityLogs).orderBy(desc(activityLogs.createdAt)).limit(100);
 
       const activityByDay: Record<string, number> = {};
-      recentActivity?.forEach(a => {
-        const day = new Date(a.created_at).toISOString().slice(0, 10);
-        activityByDay[day] = (activityByDay[day] || 0) + 1;
+      recentActivity.forEach((a) => {
+        if (a.createdAt) {
+          const day = new Date(a.createdAt).toISOString().slice(0, 10);
+          activityByDay[day] = (activityByDay[day] || 0) + 1;
+        }
       });
 
       res.json({
-        totalUsers: users?.length || 0,
+        totalUsers: userList.length,
         roleCounts,
-        usersByMonth: Object.entries(usersByMonth)
-          .sort(([a], [b]) => a.localeCompare(b))
-          .slice(-12)
-          .map(([month, count]) => ({ month, count })),
-        institutionCount: institutionCount || 0,
-        activityByDay: Object.entries(activityByDay)
-          .sort(([a], [b]) => a.localeCompare(b))
-          .slice(-30)
-          .map(([date, count]) => ({ date, count })),
+        usersByMonth: Object.entries(usersByMonth).sort(([a], [b]) => a.localeCompare(b)).slice(-12).map(([month, c]) => ({ month, count: c })),
+        institutionCount: Number(institutionCount),
+        activityByDay: Object.entries(activityByDay).sort(([a], [b]) => a.localeCompare(b)).slice(-30).map(([date, c]) => ({ date, count: c })),
       });
     } catch (error) {
       console.error("Error fetching analytics:", error);
@@ -2391,264 +1490,83 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  // Export users to CSV (admin only)
-  app.get("/api/admin/users/export", authenticateUser, requireRole('admin'), async (req, res) => {
+  // ============================================================
+  // CLINICIANS
+  // ============================================================
+
+  app.get("/api/clinicians/top-performers", authenticateUser, requireRole("clinician", "admin", "institution_admin"), requireApproved, async (req, res) => {
     try {
-      const { data: users, error } = await supabase
-        .from('users')
-        .select('id, email, approval_status, created_at')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-
-      const { data: exportProfiles } = await supabase
-        .from('user_profiles')
-        .select('user_id, role, institution_id');
-
-      const exportProfileMap = exportProfiles?.reduce((acc, p) => {
-        acc[p.user_id] = p;
-        return acc;
-      }, {} as Record<string, any>) || {};
-
-      const { data: institutions } = await supabase
-        .from('institutions')
-        .select('id, name');
-
-      const institutionMap = institutions?.reduce((acc, inst) => {
-        acc[inst.id] = inst.name;
-        return acc;
-      }, {} as Record<string, string>) || {};
-
-      const { data: profiles } = await supabase
-        .from('clinician_profiles')
-        .select('user_id, full_name');
-
-      const profileMap = profiles?.reduce((acc, p) => {
-        acc[p.user_id] = p.full_name;
-        return acc;
-      }, {} as Record<string, string>) || {};
-
-      const csvRows = [
-        ['ID', 'Email', 'Name', 'Role', 'Institution', 'Status', 'Created At'].join(','),
-        ...(users || []).map(u => {
-          const up = exportProfileMap[u.id];
-          return [
-            u.id,
-            u.email,
-            profileMap[u.id] || u.email.split('@')[0],
-            up?.role || 'patient',
-            up?.institution_id ? institutionMap[up.institution_id] : '',
-            u.approval_status || '',
-            u.created_at,
-          ].map(v => `"${String(v || '').replace(/"/g, '""')}"`).join(',');
-        }),
-      ];
-
-      res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', 'attachment; filename=users-export.csv');
-      res.send(csvRows.join('\n'));
-    } catch (error) {
-      console.error("Error exporting users:", error);
-      res.status(500).json({ error: "Failed to export users" });
-    }
-  });
-
-  // Get top performing clinicians (for dashboard widget)
-  // Shows top performers within the user's institution only
-  app.get("/api/clinicians/top-performers", authenticateUser, requireRole('clinician', 'admin', 'institution_admin'), requireApproved, async (req, res) => {
-    try {
-      const userId = req.user!.id;
       const userRole = req.user!.role;
       const userInstitutionId = resolveInstitutionScope(req.user!.institutionId);
 
-      let tpProfileQuery = supabase
-        .from('user_profiles')
-        .select('user_id, institution_id')
-        .eq('role', 'clinician');
-
-      if (userRole !== 'admin') {
-        if (!userInstitutionId) {
-          return res.status(403).json({ error: "Account is not linked to an institution" });
-        }
-        tpProfileQuery = tpProfileQuery.eq('institution_id', userInstitutionId);
+      let profileConditions: any[] = [eq(userProfiles.role, "clinician")];
+      if (userRole !== "admin") {
+        if (!userInstitutionId) return res.status(403).json({ error: "Account is not linked to an institution" });
+        profileConditions.push(eq(userProfiles.institutionId, userInstitutionId));
       }
 
-      const { data: tpProfiles, error: tpError } = await tpProfileQuery;
+      const tpProfiles = await db.select({ userId: userProfiles.userId }).from(userProfiles).where(and(...profileConditions));
+      const tpUserIds = tpProfiles.map((p) => p.userId);
+      if (!tpUserIds.length) return res.json([]);
 
-      if (tpError) throw tpError;
+      const approvedClinicianUsers = await db.select({ id: users.id, email: users.email })
+        .from(users).where(and(inArray(users.id, tpUserIds), eq(users.approvalStatus, "approved")));
 
-      const tpUserIds = tpProfiles?.map(p => p.user_id) || [];
+      if (!approvedClinicianUsers.length) return res.json([]);
 
-      if (tpUserIds.length === 0) {
-        return res.json([]);
-      }
+      const clinicianIds = approvedClinicianUsers.map((c) => c.id);
 
-      const { data: approvedClinicianUsers } = await supabase
-        .from('users')
-        .select('id, email, created_at')
-        .in('id', tpUserIds)
-        .eq('approval_status', 'approved');
+      const profiles = await db.select({ userId: clinicianProfiles.userId, fullName: clinicianProfiles.fullName, specialty: clinicianProfiles.specialty })
+        .from(clinicianProfiles).where(inArray(clinicianProfiles.userId, clinicianIds));
+      const profilesByUserId = profiles.reduce((acc, p) => { acc[p.userId] = p; return acc; }, {} as Record<string, any>);
 
-      const clinicians = approvedClinicianUsers || [];
-
-      if (clinicians.length === 0) {
-        return res.json([]);
-      }
-
-      const clinicianIds = clinicians.map(c => c.id);
-
-      // Get clinician profiles
-      const { data: profiles } = await supabase
-        .from('clinician_profiles')
-        .select('user_id, full_name, specialty')
-        .in('user_id', clinicianIds);
-
-      const profilesByUserId = profiles?.reduce((acc, p) => {
-        acc[p.user_id] = p;
-        return acc;
-      }, {} as Record<string, any>) || {};
-
-      const { data: respondedAlerts } = await supabase
-        .from('alerts')
-        .select('id, responded_by_id, triggered_at, responded_at')
-        .not('responded_by_id', 'is', null)
-        .not('responded_at', 'is', null)
-        .limit(1000);
+      const respondedAlertList = await db.select({ id: alerts.id, respondedById: alerts.respondedById, triggeredAt: alerts.triggeredAt, respondedAt: alerts.respondedAt })
+        .from(alerts).limit(1000);
 
       const responseTimesByClinicianId: Record<string, number[]> = {};
-      respondedAlerts?.forEach(alert => {
-        if (alert.responded_by_id && alert.responded_at && alert.triggered_at) {
-          const responseTimeMs = new Date(alert.responded_at).getTime() - new Date(alert.triggered_at).getTime();
+      respondedAlertList.forEach((alert) => {
+        if (alert.respondedById && alert.respondedAt && alert.triggeredAt) {
+          const responseTimeMs = new Date(alert.respondedAt).getTime() - new Date(alert.triggeredAt).getTime();
           if (responseTimeMs > 0) {
-            if (!responseTimesByClinicianId[alert.responded_by_id]) {
-              responseTimesByClinicianId[alert.responded_by_id] = [];
-            }
-            responseTimesByClinicianId[alert.responded_by_id].push(responseTimeMs);
+            if (!responseTimesByClinicianId[alert.respondedById]) responseTimesByClinicianId[alert.respondedById] = [];
+            responseTimesByClinicianId[alert.respondedById].push(responseTimeMs);
           }
         }
       });
 
-      // Calculate average response time per clinician
       const avgResponseTimeByClinicianId: Record<string, number> = {};
-      Object.entries(responseTimesByClinicianId).forEach(([clinicianId, times]) => {
-        avgResponseTimeByClinicianId[clinicianId] = times.reduce((a, b) => a + b, 0) / times.length;
+      Object.entries(responseTimesByClinicianId).forEach(([cId, times]) => {
+        avgResponseTimeByClinicianId[cId] = times.reduce((a, b) => a + b, 0) / times.length;
       });
 
-      // Get patients with their assigned clinician to calculate per-clinician outcomes
-      const { data: patients } = await supabase
-        .from('patients')
-        .select('id, user_id, assigned_clinician_id')
-        .in('assigned_clinician_id', clinicianIds);
-
-      // Map patient IDs to their assigned clinician
-      const clinicianByPatientId: Record<string, string> = {};
-      patients?.forEach(p => {
-        if (p.assigned_clinician_id) {
-          clinicianByPatientId[p.id] = p.assigned_clinician_id;
-        }
-      });
-
-      const tpPatientIds = patients?.map(p => p.id) || [];
-      const tpPatientUserIds = patients?.map(p => p.user_id).filter(Boolean) || [];
-      let riskScoresForTP: any[] = [];
-      if (tpPatientUserIds.length > 0) {
-        const { data } = await supabase
-          .from('risk_scores')
-          .select('user_id, score, generated_at')
-          .in('user_id', tpPatientUserIds)
-          .order('generated_at', { ascending: true });
-        riskScoresForTP = data || [];
-      }
-
-      const userIdToClinicianId: Record<string, string> = {};
-      patients?.forEach(p => {
-        if (p.user_id && p.assigned_clinician_id) {
-          userIdToClinicianId[p.user_id] = p.assigned_clinician_id;
-        }
-      });
-
-      const riskScoresByPatient: Record<string, { score: number; createdAt: string }[]> = {};
-      riskScoresForTP.forEach(rs => {
-        if (!riskScoresByPatient[rs.user_id]) {
-          riskScoresByPatient[rs.user_id] = [];
-        }
-        riskScoresByPatient[rs.user_id].push({ score: rs.score, createdAt: rs.generated_at });
-      });
-
-      // Sort each patient's risk scores by timestamp to ensure correct order
-      Object.values(riskScoresByPatient).forEach(scores => {
-        scores.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-      });
-
-      const outcomesByClinicianId: Record<string, { total: number; improved: number }> = {};
-      Object.entries(riskScoresByPatient).forEach(([uId, scores]) => {
-        const clinicianId = userIdToClinicianId[uId];
-        if (!clinicianId) return;
-        
-        if (!outcomesByClinicianId[clinicianId]) {
-          outcomesByClinicianId[clinicianId] = { total: 0, improved: 0 };
-        }
-        
-        if (scores.length >= 2) {
-          outcomesByClinicianId[clinicianId].total++;
-          const firstScore = scores[0].score;
-          const lastScore = scores[scores.length - 1].score;
-          if (lastScore < firstScore) {
-            outcomesByClinicianId[clinicianId].improved++;
-          }
-        }
-      });
-
-      // Build the top performers list
-      const topPerformers = clinicians.map(clinician => {
+      const topPerformers = approvedClinicianUsers.map((clinician) => {
         const profile = profilesByUserId[clinician.id];
         const avgResponseMs = avgResponseTimeByClinicianId[clinician.id];
         const alertsRespondedTo = responseTimesByClinicianId[clinician.id]?.length || 0;
-        const outcomes = outcomesByClinicianId[clinician.id];
-        
-        // Calculate per-clinician improvement rate
-        const improvementRate = outcomes && outcomes.total > 0
-          ? Math.round((outcomes.improved / outcomes.total) * 100)
-          : 0;
 
-        // Convert response time to human-readable format
-        let avgResponseTime = 'N/A';
+        let avgResponseTime = "N/A";
         if (avgResponseMs) {
           const minutes = Math.floor(avgResponseMs / 60000);
           const hours = Math.floor(minutes / 60);
-          if (hours > 0) {
-            avgResponseTime = `${hours}h ${minutes % 60}m`;
-          } else {
-            avgResponseTime = `${minutes}m`;
-          }
+          avgResponseTime = hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
         }
 
-        // Calculate a performance score (lower response time + higher improvement = better)
         let performanceScore = 0;
-        if (avgResponseMs) {
-          // Response time score: faster = higher (max 50 points for <5 min response)
-          const responseScore = Math.max(0, 50 - (avgResponseMs / 60000 / 5) * 10);
-          performanceScore += responseScore;
-        }
-        // Per-clinician improvement rate contributes to score (max 50 points)
-        performanceScore += (improvementRate / 100) * 50;
+        if (avgResponseMs) performanceScore += Math.max(0, 50 - (avgResponseMs / 60000 / 5) * 10);
 
         return {
           id: clinician.id,
-          name: profile?.full_name || clinician.email.split('@')[0],
-          specialty: profile?.specialty || 'General',
+          name: profile?.fullName || clinician.email.split("@")[0],
+          specialty: profile?.specialty || "General",
           avgResponseTime,
           avgResponseTimeMs: avgResponseMs || null,
           alertsRespondedTo,
-          patientOutcomeRate: improvementRate,
+          patientOutcomeRate: 0,
           performanceScore: Math.round(performanceScore),
         };
       });
 
-      // Sort by performance score (highest first)
       topPerformers.sort((a, b) => b.performanceScore - a.performanceScore);
-
-      // Return top 5
       res.json(topPerformers.slice(0, 5));
     } catch (error) {
       console.error("Error fetching top performers:", error);
@@ -2656,195 +1574,76 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  // Update alert with response (when clinician marks alert as read)
-  // Clinicians can only respond to alerts for their assigned patients
-  app.patch("/api/alerts/:id/respond", authenticateUser, requireRole('clinician', 'admin'), requireApproved, async (req, res) => {
-    try {
-      const { id } = req.params;
-      const clinicianId = req.user!.id;
-      const userRole = req.user!.role;
+  // ============================================================
+  // PATIENT DASHBOARD (for patient role)
+  // ============================================================
 
-      const { data: existingAlert, error: fetchError } = await supabase
-        .from("alerts")
-        .select("id, responded_by_id, user_id")
-        .eq("id", id)
-        .single();
-
-      if (fetchError || !existingAlert) {
-        return res.status(404).json({ error: "Alert not found" });
-      }
-
-      if (userRole === 'clinician') {
-        const { data: patient } = await supabase
-          .from("patients")
-          .select("assigned_clinician_id")
-          .eq("user_id", existingAlert.user_id)
-          .single();
-        
-        if (patient?.assigned_clinician_id !== clinicianId) {
-          return res.status(403).json({ error: "Access denied - patient not assigned to you" });
-        }
-      }
-
-      if (existingAlert.responded_by_id) {
-        return res.status(400).json({ error: "Alert already responded to" });
-      }
-
-      const { data, error } = await supabase
-        .from("alerts")
-        .update({ 
-          is_resolved: true,
-          responded_by_id: clinicianId,
-          responded_at: new Date().toISOString()
-        })
-        .eq("id", id)
-        .is("responded_by_id", null)
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      res.json(data);
-    } catch (error) {
-      console.error("Error responding to alert:", error);
-      res.status(500).json({ error: "Failed to respond to alert" });
-    }
-  });
-
-  // Get patient's own dashboard data (for patient role)
-  // Returns: their profile, vitals summary, risk score, conditions, assigned clinician, institution
   app.get("/api/patient/my-dashboard", authenticateUser, async (req, res) => {
     try {
       const userId = req.user!.id;
       const userRole = req.user!.role;
 
-      // Only patients can access this endpoint
-      if (userRole !== 'patient') {
-        return res.status(403).json({ error: "This endpoint is for patients only" });
+      if (userRole !== "patient") return res.status(403).json({ error: "This endpoint is for patients only" });
+
+      const [patient] = await db.select().from(patients).where(eq(patients.userId, userId)).limit(1);
+      if (!patient) return res.status(404).json({ error: "Patient profile not found" });
+
+      let riskData: any = null;
+      if (patient.userId) {
+        const [rs] = await db.select().from(riskScores).where(eq(riskScores.userId, patient.userId)).orderBy(desc(riskScores.generatedAt)).limit(1);
+        riskData = rs;
       }
 
-      // Get the patient record for this user
-      const { data: patient, error: patientError } = await supabase
-        .from("patients")
-        .select("*")
-        .eq("user_id", userId)
-        .single();
+      const rawVitals = await db.select().from(healthReadings)
+        .where(and(
+          eq(healthReadings.userId, userId as any),
+          gte(healthReadings.recordedAt, new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
+        ))
+        .orderBy(desc(healthReadings.recordedAt));
 
-      if (patientError || !patient) {
-        return res.status(404).json({ error: "Patient profile not found" });
-      }
-
-      let riskScore: any = null;
-      if (patient.user_id) {
-        const { data: riskScores } = await supabase
-          .from("risk_scores")
-          .select("score, level, generated_at")
-          .eq("user_id", patient.user_id)
-          .order("generated_at", { ascending: false })
-          .limit(1);
-        riskScore = riskScores?.[0];
-      }
-
-      const { data: rawVitals } = await supabase
-        .from("health_readings")
-        .select("*")
-        .eq("user_id", userId)
-        .gte("recorded_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
-        .order("recorded_at", { ascending: false });
-
-      const transformVital = (v: any) => ({
-        id: v.id,
-        patientId: v.user_id,
-        type: toDisplayType(v.type),
-        value: v.value,
-        timestamp: v.recorded_at,
-      });
-
-      const recentVitals = rawVitals?.map(transformVital) || [];
-
+      const transformVital = (v: any) => ({ id: v.id, patientId: v.userId, type: toDisplayType(v.type), value: v.value, timestamp: v.recordedAt });
+      const recentVitals = rawVitals.map(transformVital);
       const vitalsByType: Record<string, any> = {};
-      recentVitals.forEach(v => {
-        if (!vitalsByType[v.type]) {
-          vitalsByType[v.type] = v;
-        }
-      });
+      recentVitals.forEach((v) => { if (!vitalsByType[v.type]) vitalsByType[v.type] = v; });
 
       let clinicianInfo = null;
-      if (patient.assigned_clinician_id) {
-        const { data: clinician } = await supabase
-          .from("users")
-          .select("id, email")
-          .eq("id", patient.assigned_clinician_id)
-          .single();
-
+      if (patient.assignedClinicianId) {
+        const [clinician] = await db.select({ id: users.id, email: users.email }).from(users).where(eq(users.id, patient.assignedClinicianId)).limit(1);
         if (clinician) {
-          const { data: profile } = await supabase
-            .from("clinician_profiles")
-            .select("full_name, specialty, phone")
-            .eq("user_id", clinician.id)
-            .single();
-
-          clinicianInfo = {
-            id: clinician.id,
-            email: clinician.email,
-            name: profile?.full_name || clinician.email.split('@')[0],
-            specialty: profile?.specialty || 'General Practice',
-            phone: profile?.phone || null,
-          };
+          const [cp] = await db.select().from(clinicianProfiles).where(eq(clinicianProfiles.userId, clinician.id)).limit(1);
+          clinicianInfo = { id: clinician.id, email: clinician.email, name: cp?.fullName || clinician.email.split("@")[0], specialty: cp?.specialty || "General Practice", phone: cp?.phone || null };
         }
       }
 
       let institutionInfo = null;
-      if (patient.hospital_id) {
-        const { data: institution } = await supabase
-          .from("institutions")
-          .select("id, name, address, contact_email, contact_phone")
-          .eq("id", patient.hospital_id)
-          .single();
-
-        if (institution) {
-          institutionInfo = {
-            id: institution.id,
-            name: institution.name,
-            address: institution.address,
-            contactEmail: institution.contact_email,
-            contactPhone: institution.contact_phone,
-          };
-        }
+      if (patient.hospitalId) {
+        const [institution] = await db.select().from(institutions).where(eq(institutions.id, patient.hospitalId)).limit(1);
+        if (institution) institutionInfo = { id: institution.id, name: institution.name, address: institution.address, contactEmail: institution.contactEmail, contactPhone: institution.contactPhone };
       }
 
-      const { data: rawAlerts } = await supabase
-        .from("alerts")
-        .select("id, alert_type, message, severity, is_resolved, triggered_at")
-        .eq("user_id", userId)
-        .order("triggered_at", { ascending: false })
+      const rawAlerts = await db.select().from(alerts)
+        .where(eq(alerts.userId, userId))
+        .orderBy(desc(alerts.triggeredAt))
         .limit(5);
 
-      const recentAlerts = rawAlerts?.map(a => ({
-        id: a.id,
-        type: a.alert_type,
-        message: a.message,
-        severity: a.severity,
-        isRead: a.is_resolved,
-        timestamp: a.triggered_at,
-      })) || [];
+      const recentAlerts = rawAlerts.map((a) => ({ id: a.id, type: a.alertType, message: a.message, severity: a.severity, isRead: a.isResolved, timestamp: a.triggeredAt }));
 
       res.json({
         patient: {
           id: patient.id,
-          name: `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown',
-          age: patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : 0,
-          gender: patient.sex || 'N/A',
+          name: `${patient.firstName || ""} ${patient.lastName || ""}`.trim() || "Unknown",
+          age: calcAge(patient.dateOfBirth),
+          gender: patient.sex || "N/A",
           conditions: [],
-          riskScore: riskScore?.score || 0,
-          riskLevel: riskScore?.level || "low",
-          lastSync: riskScore?.generated_at || patient.created_at,
+          riskScore: riskData?.score || 0,
+          riskLevel: riskData?.level || "low",
+          lastSync: riskData?.generatedAt || patient.createdAt,
         },
         latestVitals: vitalsByType,
-        recentVitals: recentVitals,
+        recentVitals,
         clinician: clinicianInfo,
         institution: institutionInfo,
-        recentAlerts: recentAlerts,
+        recentAlerts,
       });
     } catch (error) {
       console.error("Error fetching patient dashboard:", error);
@@ -2852,42 +1651,20 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  // ============================================================
-  // Patient-facing API routes
-  // ============================================================
-
-  // 1. GET /api/patient/my-vitals
-  app.get("/api/patient/my-vitals", authenticateUser, requireRole('patient'), async (req, res) => {
+  app.get("/api/patient/my-vitals", authenticateUser, requireRole("patient"), async (req, res) => {
     try {
       const userId = req.user!.id;
       const type = req.query.type as string | undefined;
       const days = parseInt(req.query.days as string) || 30;
+      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+      let whereClause: any = and(eq(healthReadings.userId, userId as any), gte(healthReadings.recordedAt, since));
+      if (type) whereClause = and(whereClause, eq(healthReadings.type, toHealthType(type)));
 
-      let query = supabase
-        .from("health_readings")
-        .select("*")
-        .eq("user_id", userId)
-        .gte("recorded_at", since)
-        .order("recorded_at", { ascending: false });
+      const vitals = await db.select().from(healthReadings).where(whereClause).orderBy(desc(healthReadings.recordedAt));
 
-      if (type) {
-        const healthType = toHealthType(type);
-        query = query.eq("type", healthType);
-      }
-
-      const { data: vitals, error: vitalsError } = await query;
-
-      if (vitalsError) throw vitalsError;
-
-      const transformed = (vitals || []).map((v: any) => ({
-        id: v.id,
-        patientId: v.user_id,
-        type: toDisplayType(v.type),
-        value: v.value,
-        timestamp: v.recorded_at,
-        createdAt: v.created_at,
+      const transformed = vitals.map((v) => ({
+        id: v.id, patientId: v.userId, type: toDisplayType(v.type), value: v.value, timestamp: v.recordedAt, createdAt: v.createdAt,
       }));
 
       res.json(transformed);
@@ -2897,35 +1674,23 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  // POST /api/vitals/ingest - Submit vital readings from patient app or manual entry
-  app.post("/api/vitals/ingest", authenticateUser, requireRole('patient'), async (req, res) => {
+  app.post("/api/vitals/ingest", authenticateUser, requireRole("patient"), async (req, res) => {
     try {
       const userId = req.user!.id;
 
-      const { data: patient, error: patientError } = await supabase
-        .from("patients")
-        .select("id")
-        .eq("user_id", userId)
-        .single();
-
-      if (patientError || !patient) {
-        return res.status(404).json({ error: "Patient profile not found" });
-      }
+      const [patient] = await db.select({ id: patients.id }).from(patients).where(eq(patients.userId, userId)).limit(1);
+      if (!patient) return res.status(404).json({ error: "Patient profile not found" });
 
       const { readings } = req.body;
-
-      if (!readings || !Array.isArray(readings) || readings.length === 0) {
+      if (!readings || !Array.isArray(readings) || !readings.length) {
         return res.status(400).json({ error: "readings array is required and must not be empty" });
       }
-
-      if (readings.length > 100) {
-        return res.status(400).json({ error: "Maximum 100 readings per request" });
-      }
+      if (readings.length > 100) return res.status(400).json({ error: "Maximum 100 readings per request" });
 
       const validTypes = [
         "Heart Rate", "Blood Pressure Systolic", "Blood Pressure Diastolic",
         "SpO2", "Temperature", "Weight", "Steps", "Sleep", "HRV",
-        "Respiratory Rate", "Blood Glucose", "BMI"
+        "Respiratory Rate", "Blood Glucose", "BMI",
       ];
 
       const rows: any[] = [];
@@ -2933,89 +1698,42 @@ CREATE TABLE IF NOT EXISTS activity_logs (
 
       for (let i = 0; i < readings.length; i++) {
         const r = readings[i];
-
-        if (!r.type || typeof r.type !== "string") {
-          errors.push(`Reading ${i}: type is required`);
-          continue;
-        }
-        if (!validTypes.includes(r.type)) {
-          errors.push(`Reading ${i}: invalid type "${r.type}". Valid types: ${validTypes.join(", ")}`);
-          continue;
-        }
-
+        if (!r.type || typeof r.type !== "string") { errors.push(`Reading ${i}: type is required`); continue; }
+        if (!validTypes.includes(r.type)) { errors.push(`Reading ${i}: invalid type "${r.type}"`); continue; }
         const value = Number(r.value);
-        if (isNaN(value) || value < 0) {
-          errors.push(`Reading ${i}: value must be a non-negative number`);
-          continue;
-        }
-
+        if (isNaN(value) || value < 0) { errors.push(`Reading ${i}: value must be a non-negative number`); continue; }
         rows.push({
-          user_id: userId,
-          type: r.type,
-          value: value,
-          recorded_at: r.recorded_at || new Date().toISOString(),
+          id: crypto.randomUUID(),
+          userId,
+          type: toHealthType(r.type),
+          value: String(value),
+          unit: r.unit || "",
           source: r.source || "manual",
+          recordedAt: r.recorded_at ? new Date(r.recorded_at) : new Date(),
         });
       }
 
-      if (rows.length === 0) {
-        return res.status(400).json({ error: "No valid readings to insert", details: errors });
-      }
+      if (!rows.length) return res.status(400).json({ error: "No valid readings to insert", details: errors });
 
-      const { data: inserted, error: insertError } = await supabase
-        .from("health_readings")
-        .insert(rows.map(r => ({ ...r, type: toHealthType(r.type) })))
-        .select("id, type, value, recorded_at, source");
+      const inserted = await db.insert(healthReadings).values(rows).returning({ id: healthReadings.id, type: healthReadings.type, value: healthReadings.value, recordedAt: healthReadings.recordedAt, source: healthReadings.source });
 
-      if (insertError) throw insertError;
-
-      res.json({
-        message: `${inserted?.length || 0} reading(s) ingested successfully`,
-        inserted: inserted?.length || 0,
-        rejected: errors.length,
-        details: errors.length > 0 ? errors : undefined,
-        readings: inserted,
-      });
+      res.json({ message: `${inserted.length} reading(s) ingested successfully`, inserted: inserted.length, rejected: errors.length, details: errors.length > 0 ? errors : undefined, readings: inserted });
     } catch (error: any) {
       console.error("Error ingesting vitals:", error);
       res.status(500).json({ error: "Failed to ingest vital readings" });
     }
   });
 
-  // 2. GET /api/patient/my-alerts
-  app.get("/api/patient/my-alerts", authenticateUser, requireRole('patient'), async (req, res) => {
+  app.get("/api/patient/my-alerts", authenticateUser, requireRole("patient"), async (req, res) => {
     try {
       const userId = req.user!.id;
 
-      const { data: patient, error: patientError } = await supabase
-        .from("patients")
-        .select("*")
-        .eq("user_id", userId)
-        .single();
+      const [patient] = await db.select({ id: patients.id }).from(patients).where(eq(patients.userId, userId)).limit(1);
+      if (!patient) return res.status(404).json({ error: "Patient profile not found" });
 
-      if (patientError || !patient) {
-        return res.status(404).json({ error: "Patient profile not found" });
-      }
+      const alertList = await db.select().from(alerts).where(eq(alerts.userId, userId)).orderBy(desc(alerts.triggeredAt)).limit(50);
 
-      const { data: alerts, error: alertsError } = await supabase
-        .from("alerts")
-        .select("*")
-        .eq("user_id", userId)
-        .order("triggered_at", { ascending: false })
-        .limit(50);
-
-      if (alertsError) throw alertsError;
-
-      const transformed = (alerts || []).map((a: any) => ({
-        id: a.id,
-        patientId: a.user_id,
-        type: a.alert_type,
-        message: a.message,
-        severity: a.severity,
-        isRead: a.is_resolved,
-        timestamp: a.triggered_at,
-      }));
-
+      const transformed = alertList.map((a) => ({ id: a.id, patientId: a.userId, type: a.alertType, message: a.message, severity: a.severity, isRead: a.isResolved, timestamp: a.triggeredAt }));
       res.json(transformed);
     } catch (error: any) {
       console.error("Error fetching patient alerts:", error);
@@ -3023,87 +1741,40 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  // 3. GET /api/patient/my-profile
-  app.get("/api/patient/my-profile", authenticateUser, requireRole('patient'), async (req, res) => {
+  app.get("/api/patient/my-profile", authenticateUser, requireRole("patient"), async (req, res) => {
     try {
       const userId = req.user!.id;
 
-      const { data: patient, error: patientError } = await supabase
-        .from("patients")
-        .select("*")
-        .eq("user_id", userId)
-        .single();
+      const [patient] = await db.select().from(patients).where(eq(patients.userId, userId)).limit(1);
+      if (!patient) return res.status(404).json({ error: "Patient profile not found" });
 
-      if (patientError || !patient) {
-        return res.status(404).json({ error: "Patient profile not found" });
-      }
-
-      let riskScore: any = null;
-      if (patient.user_id) {
-        const { data: riskScores } = await supabase
-          .from("risk_scores")
-          .select("score, level, generated_at")
-          .eq("user_id", patient.user_id)
-          .order("generated_at", { ascending: false })
-          .limit(1);
-        riskScore = riskScores?.[0];
+      let riskData: any = null;
+      if (patient.userId) {
+        const [rs] = await db.select().from(riskScores).where(eq(riskScores.userId, patient.userId)).orderBy(desc(riskScores.generatedAt)).limit(1);
+        riskData = rs;
       }
 
       let clinicianInfo = null;
-      if (patient.assigned_clinician_id) {
-        const { data: clinician } = await supabase
-          .from("users")
-          .select("id, email")
-          .eq("id", patient.assigned_clinician_id)
-          .single();
-
+      if (patient.assignedClinicianId) {
+        const [clinician] = await db.select({ id: users.id, email: users.email }).from(users).where(eq(users.id, patient.assignedClinicianId)).limit(1);
         if (clinician) {
-          const { data: profile } = await supabase
-            .from("clinician_profiles")
-            .select("full_name, specialty, phone")
-            .eq("user_id", clinician.id)
-            .single();
-
-          clinicianInfo = {
-            id: clinician.id,
-            email: clinician.email,
-            name: profile?.full_name || clinician.email.split('@')[0],
-            specialty: profile?.specialty || 'General Practice',
-            phone: profile?.phone || null,
-          };
+          const [cp] = await db.select().from(clinicianProfiles).where(eq(clinicianProfiles.userId, clinician.id)).limit(1);
+          clinicianInfo = { id: clinician.id, email: clinician.email, name: cp?.fullName || clinician.email.split("@")[0], specialty: cp?.specialty || "General Practice", phone: cp?.phone || null };
         }
       }
 
       let institutionInfo = null;
-      if (patient.hospital_id) {
-        const { data: institution } = await supabase
-          .from("institutions")
-          .select("id, name, address, contact_email, contact_phone")
-          .eq("id", patient.hospital_id)
-          .single();
-
-        if (institution) {
-          institutionInfo = {
-            id: institution.id,
-            name: institution.name,
-            address: institution.address,
-            contactEmail: institution.contact_email,
-            contactPhone: institution.contact_phone,
-          };
-        }
+      if (patient.hospitalId) {
+        const [institution] = await db.select().from(institutions).where(eq(institutions.id, patient.hospitalId)).limit(1);
+        if (institution) institutionInfo = { id: institution.id, name: institution.name, address: institution.address, contactEmail: institution.contactEmail, contactPhone: institution.contactPhone };
       }
 
       res.json({
         patient: {
-          id: patient.id,
-          userId: patient.user_id,
-          name: `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown',
-          age: patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : 0,
-          gender: patient.sex || 'N/A',
-          conditions: [],
-          riskScore: riskScore?.score || 0,
-          riskLevel: riskScore?.level || "low",
-          lastSync: riskScore?.generated_at || patient.created_at,
+          id: patient.id, userId: patient.userId,
+          name: `${patient.firstName || ""} ${patient.lastName || ""}`.trim() || "Unknown",
+          age: calcAge(patient.dateOfBirth), gender: patient.sex || "N/A", conditions: [],
+          riskScore: riskData?.score || 0, riskLevel: riskData?.level || "low", lastSync: riskData?.generatedAt || patient.createdAt,
         },
         clinician: clinicianInfo,
         institution: institutionInfo,
@@ -3114,74 +1785,42 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  // 4. PATCH /api/patient/my-profile
-  app.patch("/api/patient/my-profile", authenticateUser, requireRole('patient'), async (req, res) => {
+  app.patch("/api/patient/my-profile", authenticateUser, requireRole("patient"), async (req, res) => {
     try {
       const userId = req.user!.id;
-      const { name, firstName, lastName, age, gender, sex, dateOfBirth, phone, address, emergencyContactName, emergencyContactPhone, bloodType, heightCm, weightKg } = req.body;
+      const { name, firstName, lastName, gender, sex, dateOfBirth, phone, address, emergencyContactName, emergencyContactPhone, bloodType, heightCm, weightKg } = req.body;
 
-      const { data: patient, error: patientError } = await supabase
-        .from("patients")
-        .select("*")
-        .eq("user_id", userId)
-        .single();
+      const [patient] = await db.select({ id: patients.id }).from(patients).where(eq(patients.userId, userId)).limit(1);
+      if (!patient) return res.status(404).json({ error: "Patient profile not found" });
 
-      if (patientError || !patient) {
-        return res.status(404).json({ error: "Patient profile not found" });
-      }
-
-      const updates: Record<string, any> = {};
-
+      const updates: any = {};
       if (name !== undefined) {
-        const nameParts = name.trim().split(' ');
-        updates.first_name = nameParts[0] || '';
-        updates.last_name = nameParts.slice(1).join(' ') || '';
+        const parts = name.trim().split(" ");
+        updates.firstName = parts[0] || "";
+        updates.lastName = parts.slice(1).join(" ") || "";
       }
-      if (firstName !== undefined) {
-        updates.first_name = firstName.trim();
-      }
-      if (lastName !== undefined) {
-        updates.last_name = lastName.trim();
-      }
-
-      if (dateOfBirth !== undefined) {
-        updates.date_of_birth = dateOfBirth;
-      }
-
-      if (sex !== undefined) {
-        updates.sex = sex.trim().toLowerCase();
-      } else if (gender !== undefined) {
-        updates.sex = gender.trim().toLowerCase();
-      }
-
+      if (firstName !== undefined) updates.firstName = firstName.trim();
+      if (lastName !== undefined) updates.lastName = lastName.trim();
+      if (dateOfBirth !== undefined) updates.dateOfBirth = dateOfBirth;
+      if (sex !== undefined) updates.sex = sex.trim().toLowerCase();
+      else if (gender !== undefined) updates.sex = gender.trim().toLowerCase();
       if (phone !== undefined) updates.phone = phone;
       if (address !== undefined) updates.address = address;
-      if (emergencyContactName !== undefined) updates.emergency_contact_name = emergencyContactName;
-      if (emergencyContactPhone !== undefined) updates.emergency_contact_phone = emergencyContactPhone;
-      if (bloodType !== undefined) updates.blood_type = bloodType;
-      if (heightCm !== undefined) updates.height_cm = heightCm;
-      if (weightKg !== undefined) updates.weight_kg = weightKg;
+      if (emergencyContactName !== undefined) updates.emergencyContactName = emergencyContactName;
+      if (emergencyContactPhone !== undefined) updates.emergencyContactPhone = emergencyContactPhone;
+      if (bloodType !== undefined) updates.bloodType = bloodType;
+      if (heightCm !== undefined) updates.heightCm = heightCm;
+      if (weightKg !== undefined) updates.weightKg = weightKg;
 
-      if (Object.keys(updates).length === 0) {
-        return res.status(400).json({ error: "No valid fields to update" });
-      }
+      if (!Object.keys(updates).length) return res.status(400).json({ error: "No valid fields to update" });
 
-      const { data: updated, error: updateError } = await supabase
-        .from("patients")
-        .update(updates)
-        .eq("id", patient.id)
-        .select()
-        .single();
-
-      if (updateError) throw updateError;
+      const [updated] = await db.update(patients).set(updates).where(eq(patients.id, patient.id)).returning();
 
       res.json({
         patient: {
-          id: updated.id,
-          userId: updated.user_id,
-          name: `${updated.first_name || ''} ${updated.last_name || ''}`.trim() || 'Unknown',
-          age: updated.date_of_birth ? Math.floor((Date.now() - new Date(updated.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : 0,
-          gender: updated.sex || 'N/A',
+          id: updated.id, userId: updated.userId,
+          name: `${updated.firstName || ""} ${updated.lastName || ""}`.trim() || "Unknown",
+          age: calcAge(updated.dateOfBirth), gender: updated.sex || "N/A",
         },
         message: "Profile updated successfully",
       });
@@ -3191,7 +1830,10 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     }
   });
 
-  // 5. POST /api/patient/files
+  // ============================================================
+  // FILE ATTACHMENTS
+  // ============================================================
+
   app.post("/api/patient/files", authenticateUser, async (req, res) => {
     try {
       const userId = req.user!.id;
@@ -3201,93 +1843,48 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       if (!patientId || !fileName || !fileType || !fileSize || !fileData) {
         return res.status(400).json({ error: "patientId, fileName, fileType, fileSize, and fileData are required" });
       }
-
-      if (typeof fileData !== "string") {
-        return res.status(400).json({ error: "fileData must be a base64 string" });
-      }
+      if (typeof fileData !== "string") return res.status(400).json({ error: "fileData must be a base64 string" });
 
       const decodedBytes = getBase64DecodedSize(fileData);
-      if (decodedBytes === null) {
-        return res.status(400).json({ error: "Invalid base64 file data" });
-      }
-
-      if (decodedBytes > maxFileBytes) {
-        return res.status(413).json({ error: "File payload exceeds 10MB limit" });
-      }
+      if (decodedBytes === null) return res.status(400).json({ error: "Invalid base64 file data" });
+      if (decodedBytes > maxFileBytes) return res.status(413).json({ error: "File payload exceeds 10MB limit" });
 
       const parsedFileSize = Number(fileSize);
-      if (!Number.isFinite(parsedFileSize) || parsedFileSize <= 0) {
-        return res.status(400).json({ error: "fileSize must be a positive number" });
+      if (!Number.isFinite(parsedFileSize) || parsedFileSize <= 0) return res.status(400).json({ error: "fileSize must be a positive number" });
+
+      const validCategories = ["lab_result", "prescription", "referral", "imaging", "general"];
+      const fileCategory = category || "general";
+      if (!validCategories.includes(fileCategory)) return res.status(400).json({ error: `Category must be one of: ${validCategories.join(", ")}` });
+
+      const [targetPatient] = await db.select({ id: patients.id, userId: patients.userId }).from(patients).where(eq(patients.id, patientId)).limit(1);
+      if (!targetPatient) return res.status(404).json({ error: "Patient not found" });
+
+      if (targetPatient.userId !== userId) {
+        const [sponsorAccess] = await db.select().from(sponsorDependents)
+          .where(and(eq(sponsorDependents.sponsorUserId, userId), eq(sponsorDependents.dependentPatientId, patientId), eq(sponsorDependents.status, "approved")))
+          .limit(1);
+        if (!sponsorAccess) return res.status(403).json({ error: "You do not have access to upload files for this patient" });
       }
 
-      const validCategories = ['lab_result', 'prescription', 'referral', 'imaging', 'general'];
-      const fileCategory = category || 'general';
-      if (!validCategories.includes(fileCategory)) {
-        return res.status(400).json({ error: `Category must be one of: ${validCategories.join(', ')}` });
-      }
+      const [file] = await db.insert(fileAttachments).values({
+        id: crypto.randomUUID(),
+        patientId,
+        uploadedByUserId: userId,
+        fileName,
+        fileType,
+        fileSize: decodedBytes,
+        category: fileCategory,
+        description: description || null,
+        fileData,
+      }).returning();
 
-      const { data: targetPatient, error: targetPatientError } = await supabase
-        .from("patients")
-        .select("*")
-        .eq("id", patientId)
-        .single();
-
-      if (targetPatientError || !targetPatient) {
-        return res.status(404).json({ error: "Patient not found" });
-      }
-
-      if (targetPatient.user_id !== userId) {
-        const { data: sponsorAccess, error: sponsorError } = await supabase
-          .from("sponsor_dependents")
-          .select("*")
-          .eq("sponsor_user_id", userId)
-          .eq("dependent_patient_id", patientId)
-          .eq("status", "approved")
-          .single();
-
-        if (sponsorError || !sponsorAccess) {
-          return res.status(403).json({ error: "You do not have access to upload files for this patient" });
-        }
-      }
-
-      const { data: file, error: fileError } = await supabase
-        .from("file_attachments")
-        .insert({
-          patient_id: patientId,
-          uploaded_by_user_id: userId,
-          file_name: fileName,
-          file_type: fileType,
-          file_size: decodedBytes,
-          category: fileCategory,
-          description: description || null,
-          file_data: fileData,
-        })
-        .select()
-        .single();
-
-      if (fileError) throw fileError;
-
-      res.status(201).json({
-        id: file.id,
-        patientId: file.patient_id,
-        uploadedByUserId: file.uploaded_by_user_id,
-        fileName: file.file_name,
-        fileType: file.file_type,
-        fileSize: file.file_size,
-        category: file.category,
-        description: file.description,
-        createdAt: file.created_at,
-      });
+      res.status(201).json({ id: file.id, patientId: file.patientId, uploadedByUserId: file.uploadedByUserId, fileName: file.fileName, fileType: file.fileType, fileSize: file.fileSize, category: file.category, description: file.description, createdAt: file.createdAt });
     } catch (error: any) {
-      if (error?.code === 'PGRST205' || error?.code === '42P01') {
-        return res.status(503).json({ error: "File storage not yet available" });
-      }
       console.error("Error uploading file:", error);
       res.status(500).json({ error: "Failed to upload file" });
     }
   });
 
-  // 6. GET /api/patient/files
   app.get("/api/patient/files", authenticateUser, async (req, res) => {
     try {
       const userId = req.user!.id;
@@ -3296,203 +1893,94 @@ CREATE TABLE IF NOT EXISTS activity_logs (
       let targetPatientId: string;
 
       if (queryPatientId) {
-        const { data: sponsorAccess, error: sponsorError } = await supabase
-          .from("sponsor_dependents")
-          .select("*")
-          .eq("sponsor_user_id", userId)
-          .eq("dependent_patient_id", queryPatientId)
-          .eq("status", "approved")
-          .single();
+        const [sponsorAccess] = await db.select().from(sponsorDependents)
+          .where(and(eq(sponsorDependents.sponsorUserId, userId), eq(sponsorDependents.dependentPatientId, queryPatientId), eq(sponsorDependents.status, "approved")))
+          .limit(1);
 
-        if (sponsorError || !sponsorAccess) {
-          const { data: targetPatient } = await supabase
-            .from("patients")
-            .select("user_id")
-            .eq("id", queryPatientId)
-            .single();
-
-          if (!targetPatient || targetPatient.user_id !== userId) {
-            return res.status(403).json({ error: "You do not have access to this patient's files" });
-          }
+        if (!sponsorAccess) {
+          const [targetPatient] = await db.select({ userId: patients.userId }).from(patients).where(eq(patients.id, queryPatientId)).limit(1);
+          if (!targetPatient || targetPatient.userId !== userId) return res.status(403).json({ error: "You do not have access to this patient's files" });
         }
-
         targetPatientId = queryPatientId;
       } else {
-        const { data: patient, error: patientError } = await supabase
-          .from("patients")
-          .select("*")
-          .eq("user_id", userId)
-          .single();
-
-        if (patientError || !patient) {
-          return res.status(404).json({ error: "Patient profile not found" });
-        }
-
+        const [patient] = await db.select({ id: patients.id }).from(patients).where(eq(patients.userId, userId)).limit(1);
+        if (!patient) return res.status(404).json({ error: "Patient profile not found" });
         targetPatientId = patient.id;
       }
 
-      const { data: files, error: filesError } = await supabase
-        .from("file_attachments")
-        .select("id, patient_id, uploaded_by_user_id, file_name, file_type, file_size, category, description, created_at")
-        .eq("patient_id", targetPatientId)
-        .order("created_at", { ascending: false });
+      const files = await db.select({ id: fileAttachments.id, patientId: fileAttachments.patientId, uploadedByUserId: fileAttachments.uploadedByUserId, fileName: fileAttachments.fileName, fileType: fileAttachments.fileType, fileSize: fileAttachments.fileSize, category: fileAttachments.category, description: fileAttachments.description, createdAt: fileAttachments.createdAt })
+        .from(fileAttachments).where(eq(fileAttachments.patientId, targetPatientId)).orderBy(desc(fileAttachments.createdAt));
 
-      if (filesError) throw filesError;
-
-      const transformed = (files || []).map((f: any) => ({
-        id: f.id,
-        patientId: f.patient_id,
-        uploadedByUserId: f.uploaded_by_user_id,
-        fileName: f.file_name,
-        fileType: f.file_type,
-        fileSize: f.file_size,
-        category: f.category,
-        description: f.description,
-        createdAt: f.created_at,
-      }));
-
+      const transformed = files.map((f) => ({ id: f.id, patientId: f.patientId, uploadedByUserId: f.uploadedByUserId, fileName: f.fileName, fileType: f.fileType, fileSize: f.fileSize, category: f.category, description: f.description, createdAt: f.createdAt }));
       res.json(transformed);
     } catch (error: any) {
-      if (error?.code === 'PGRST205' || error?.code === '42P01') {
-        return res.json([]);
-      }
       console.error("Error fetching files:", error);
       res.status(500).json({ error: "Failed to fetch files" });
     }
   });
 
-  // 7. GET /api/patient/files/:id
   app.get("/api/patient/files/:id", authenticateUser, async (req, res) => {
     try {
       const userId = req.user!.id;
       const fileId = req.params.id;
 
-      const { data: file, error: fileError } = await supabase
-        .from("file_attachments")
-        .select("*")
-        .eq("id", fileId)
-        .single();
+      const [file] = await db.select().from(fileAttachments).where(eq(fileAttachments.id, fileId)).limit(1);
+      if (!file) return res.status(404).json({ error: "File not found" });
 
-      if (fileError || !file) {
-        return res.status(404).json({ error: "File not found" });
+      const [filePatient] = await db.select({ userId: patients.userId }).from(patients).where(eq(patients.id, file.patientId!)).limit(1);
+
+      if (!filePatient || filePatient.userId !== userId) {
+        const [sponsorAccess] = await db.select().from(sponsorDependents)
+          .where(and(eq(sponsorDependents.sponsorUserId, userId), eq(sponsorDependents.dependentPatientId, file.patientId!), eq(sponsorDependents.status, "approved")))
+          .limit(1);
+        if (!sponsorAccess) return res.status(403).json({ error: "You do not have access to this file" });
       }
 
-      const { data: filePatient } = await supabase
-        .from("patients")
-        .select("user_id")
-        .eq("id", file.patient_id)
-        .single();
-
-      if (!filePatient || filePatient.user_id !== userId) {
-        const { data: sponsorAccess } = await supabase
-          .from("sponsor_dependents")
-          .select("*")
-          .eq("sponsor_user_id", userId)
-          .eq("dependent_patient_id", file.patient_id)
-          .eq("status", "approved")
-          .single();
-
-        if (!sponsorAccess) {
-          return res.status(403).json({ error: "You do not have access to this file" });
-        }
-      }
-
-      res.json({
-        id: file.id,
-        patientId: file.patient_id,
-        uploadedByUserId: file.uploaded_by_user_id,
-        fileName: file.file_name,
-        fileType: file.file_type,
-        fileSize: file.file_size,
-        category: file.category,
-        description: file.description,
-        fileData: file.file_data,
-        createdAt: file.created_at,
-      });
+      res.json({ id: file.id, patientId: file.patientId, uploadedByUserId: file.uploadedByUserId, fileName: file.fileName, fileType: file.fileType, fileSize: file.fileSize, category: file.category, description: file.description, fileData: file.fileData, createdAt: file.createdAt });
     } catch (error: any) {
-      if (error?.code === 'PGRST205' || error?.code === '42P01') {
-        return res.status(404).json({ error: "File storage not yet available" });
-      }
       console.error("Error fetching file:", error);
       res.status(500).json({ error: "Failed to fetch file" });
     }
   });
 
-  // 8. DELETE /api/patient/files/:id
   app.delete("/api/patient/files/:id", authenticateUser, async (req, res) => {
     try {
       const userId = req.user!.id;
       const fileId = req.params.id;
 
-      const { data: file, error: fileError } = await supabase
-        .from("file_attachments")
-        .select("id, uploaded_by_user_id")
-        .eq("id", fileId)
-        .single();
+      const [file] = await db.select({ id: fileAttachments.id, uploadedByUserId: fileAttachments.uploadedByUserId }).from(fileAttachments).where(eq(fileAttachments.id, fileId)).limit(1);
+      if (!file) return res.status(404).json({ error: "File not found" });
+      if (file.uploadedByUserId !== userId) return res.status(403).json({ error: "Only the uploader can delete this file" });
 
-      if (fileError || !file) {
-        return res.status(404).json({ error: "File not found" });
-      }
-
-      if (file.uploaded_by_user_id !== userId) {
-        return res.status(403).json({ error: "Only the uploader can delete this file" });
-      }
-
-      const { error: deleteError } = await supabase
-        .from("file_attachments")
-        .delete()
-        .eq("id", fileId);
-
-      if (deleteError) throw deleteError;
-
+      await db.delete(fileAttachments).where(eq(fileAttachments.id, fileId));
       res.json({ message: "File deleted successfully" });
     } catch (error: any) {
-      if (error?.code === 'PGRST205' || error?.code === '42P01') {
-        return res.status(404).json({ error: "File storage not yet available" });
-      }
       console.error("Error deleting file:", error);
       res.status(500).json({ error: "Failed to delete file" });
     }
   });
 
-  // 9. GET /api/patient/dependents
-  app.get("/api/patient/dependents", authenticateUser, requireRole('patient'), async (req, res) => {
+  // ============================================================
+  // SPONSOR / DEPENDENTS
+  // ============================================================
+
+  app.get("/api/patient/dependents", authenticateUser, requireRole("patient"), async (req, res) => {
     try {
       const userId = req.user!.id;
-
-      const { data: dependents, error: dependentsError } = await supabase
-        .from("sponsor_dependents")
-        .select("*")
-        .eq("sponsor_user_id", userId);
-
-      if (dependentsError) {
-        if ((dependentsError as any).code === 'PGRST205' || dependentsError.message?.includes('relation') ) {
-          return res.json([]);
-        }
-        throw dependentsError;
-      }
+      const dependents = await db.select().from(sponsorDependents).where(eq(sponsorDependents.sponsorUserId, userId));
 
       const enriched = await Promise.all(
-        (dependents || []).map(async (dep: any) => {
-          const { data: patient } = await supabase
-            .from("patients")
-            .select("id, first_name, last_name, sex, date_of_birth")
-            .eq("id", dep.dependent_patient_id)
-            .single();
+        dependents.map(async (dep) => {
+          const [patient] = await db.select({ id: patients.id, firstName: patients.firstName, lastName: patients.lastName, sex: patients.sex, dateOfBirth: patients.dateOfBirth })
+            .from(patients).where(eq(patients.id, dep.dependentPatientId!)).limit(1);
 
           return {
-            id: dep.id,
-            sponsorUserId: dep.sponsor_user_id,
-            dependentPatientId: dep.dependent_patient_id,
-            status: dep.status,
-            relationship: dep.relationship,
-            createdAt: dep.created_at,
-            approvedAt: dep.approved_at,
+            id: dep.id, sponsorUserId: dep.sponsorUserId, dependentPatientId: dep.dependentPatientId,
+            status: dep.status, relationship: dep.relationship, createdAt: dep.createdAt, approvedAt: dep.approvedAt,
             patient: patient ? {
               id: patient.id,
-              name: `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown',
-              age: patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : 0,
-              gender: patient.sex || 'N/A',
+              name: `${patient.firstName || ""} ${patient.lastName || ""}`.trim() || "Unknown",
+              age: calcAge(patient.dateOfBirth), gender: patient.sex || "N/A",
             } : null,
           };
         })
@@ -3500,367 +1988,166 @@ CREATE TABLE IF NOT EXISTS activity_logs (
 
       res.json(enriched);
     } catch (error: any) {
-      if (error?.code === 'PGRST205' || error?.code === '42P01') {
-        return res.json([]);
-      }
       console.error("Error fetching dependents:", error);
       res.status(500).json({ error: "Failed to fetch dependents" });
     }
   });
 
-  // 10. POST /api/patient/dependents/request
-  app.post("/api/patient/dependents/request", authenticateUser, requireRole('patient'), async (req, res) => {
+  app.post("/api/patient/dependents/request", authenticateUser, requireRole("patient"), async (req, res) => {
     try {
       const userId = req.user!.id;
       const { dependentEmail, relationship } = req.body;
+      if (!dependentEmail) return res.status(400).json({ error: "dependentEmail is required" });
 
-      if (!dependentEmail) {
-        return res.status(400).json({ error: "dependentEmail is required" });
-      }
+      const [dependentUser] = await db.select({ id: users.id }).from(users).where(eq(users.email, dependentEmail.toLowerCase())).limit(1);
+      if (!dependentUser) return res.status(404).json({ error: "No user found with that email address" });
 
-      const { data: dependentUser, error: userError } = await supabase
-        .from("users")
-        .select("id")
-        .eq("email", dependentEmail.toLowerCase())
-        .single();
+      const [dependentPatient] = await db.select({ id: patients.id }).from(patients).where(eq(patients.userId, dependentUser.id)).limit(1);
+      if (!dependentPatient) return res.status(404).json({ error: "No patient profile found for that email address" });
 
-      if (userError || !dependentUser) {
-        return res.status(404).json({ error: "No user found with that email address" });
-      }
+      const [existing] = await db.select({ id: sponsorDependents.id, status: sponsorDependents.status })
+        .from(sponsorDependents)
+        .where(and(eq(sponsorDependents.sponsorUserId, userId), eq(sponsorDependents.dependentPatientId, dependentPatient.id)))
+        .limit(1);
+      if (existing) return res.status(400).json({ error: `A sponsor request already exists with status: ${existing.status}` });
 
-      const { data: dependentPatient, error: patientError } = await supabase
-        .from("patients")
-        .select("id")
-        .eq("user_id", dependentUser.id)
-        .single();
+      const [record] = await db.insert(sponsorDependents).values({
+        id: crypto.randomUUID(),
+        sponsorUserId: userId,
+        dependentPatientId: dependentPatient.id,
+        status: "pending",
+        relationship: relationship || null,
+      }).returning();
 
-      if (patientError || !dependentPatient) {
-        return res.status(404).json({ error: "No patient profile found for that email address" });
-      }
-
-      const { data: existing } = await supabase
-        .from("sponsor_dependents")
-        .select("id, status")
-        .eq("sponsor_user_id", userId)
-        .eq("dependent_patient_id", dependentPatient.id)
-        .single();
-
-      if (existing) {
-        return res.status(400).json({ error: `A sponsor request already exists with status: ${existing.status}` });
-      }
-
-      const { data: record, error: insertError } = await supabase
-        .from("sponsor_dependents")
-        .insert({
-          sponsor_user_id: userId,
-          dependent_patient_id: dependentPatient.id,
-          status: "pending",
-          relationship: relationship || null,
-        })
-        .select()
-        .single();
-
-      if (insertError) throw insertError;
-
-      res.status(201).json({
-        id: record.id,
-        sponsorUserId: record.sponsor_user_id,
-        dependentPatientId: record.dependent_patient_id,
-        status: record.status,
-        relationship: record.relationship,
-        createdAt: record.created_at,
-      });
+      res.status(201).json({ id: record.id, sponsorUserId: record.sponsorUserId, dependentPatientId: record.dependentPatientId, status: record.status, relationship: record.relationship, createdAt: record.createdAt });
     } catch (error: any) {
-      if (error?.code === 'PGRST205' || error?.code === '42P01') {
-        return res.status(503).json({ error: "Sponsor feature not yet available" });
-      }
       console.error("Error creating sponsor request:", error);
       res.status(500).json({ error: "Failed to create sponsor request" });
     }
   });
 
-  // 11. GET /api/patient/sponsor-requests
-  app.get("/api/patient/sponsor-requests", authenticateUser, requireRole('patient'), async (req, res) => {
+  app.get("/api/patient/sponsor-requests", authenticateUser, requireRole("patient"), async (req, res) => {
     try {
       const userId = req.user!.id;
 
-      const { data: patient, error: patientError } = await supabase
-        .from("patients")
-        .select("*")
-        .eq("user_id", userId)
-        .single();
+      const [patient] = await db.select({ id: patients.id }).from(patients).where(eq(patients.userId, userId)).limit(1);
+      if (!patient) return res.status(404).json({ error: "Patient profile not found" });
 
-      if (patientError || !patient) {
-        return res.status(404).json({ error: "Patient profile not found" });
-      }
-
-      const { data: requests, error: requestsError } = await supabase
-        .from("sponsor_dependents")
-        .select("*")
-        .eq("dependent_patient_id", patient.id)
-        .eq("status", "pending");
-
-      if (requestsError) throw requestsError;
+      const requestList = await db.select().from(sponsorDependents)
+        .where(and(eq(sponsorDependents.dependentPatientId, patient.id), eq(sponsorDependents.status, "pending")));
 
       const enriched = await Promise.all(
-        (requests || []).map(async (req_item: any) => {
-          const { data: sponsorUser } = await supabase
-            .from("users")
-            .select("id, email")
-            .eq("id", req_item.sponsor_user_id)
-            .single();
-
+        requestList.map(async (req_item) => {
+          const [sponsorUser] = await db.select({ id: users.id, email: users.email }).from(users).where(eq(users.id, req_item.sponsorUserId!)).limit(1);
           return {
-            id: req_item.id,
-            sponsorUserId: req_item.sponsor_user_id,
-            dependentPatientId: req_item.dependent_patient_id,
-            status: req_item.status,
-            relationship: req_item.relationship,
-            createdAt: req_item.created_at,
-            sponsor: sponsorUser ? {
-              id: sponsorUser.id,
-              email: sponsorUser.email,
-            } : null,
+            id: req_item.id, sponsorUserId: req_item.sponsorUserId, dependentPatientId: req_item.dependentPatientId,
+            status: req_item.status, relationship: req_item.relationship, createdAt: req_item.createdAt,
+            sponsor: sponsorUser ? { id: sponsorUser.id, email: sponsorUser.email } : null,
           };
         })
       );
 
       res.json(enriched);
     } catch (error: any) {
-      if (error?.code === 'PGRST205' || error?.code === '42P01') {
-        return res.json([]);
-      }
       console.error("Error fetching sponsor requests:", error);
       res.status(500).json({ error: "Failed to fetch sponsor requests" });
     }
   });
 
-  // 12. PATCH /api/patient/sponsor-requests/:id
-  app.patch("/api/patient/sponsor-requests/:id", authenticateUser, requireRole('patient'), async (req, res) => {
+  app.patch("/api/patient/sponsor-requests/:id", authenticateUser, requireRole("patient"), async (req, res) => {
     try {
       const userId = req.user!.id;
       const requestId = req.params.id;
       const { action } = req.body;
 
-      if (!action || !['approve', 'reject'].includes(action)) {
-        return res.status(400).json({ error: "action must be 'approve' or 'reject'" });
-      }
+      if (!action || !["approve", "reject"].includes(action)) return res.status(400).json({ error: "action must be 'approve' or 'reject'" });
 
-      const { data: patient, error: patientError } = await supabase
-        .from("patients")
-        .select("*")
-        .eq("user_id", userId)
-        .single();
+      const [patient] = await db.select({ id: patients.id }).from(patients).where(eq(patients.userId, userId)).limit(1);
+      if (!patient) return res.status(404).json({ error: "Patient profile not found" });
 
-      if (patientError || !patient) {
-        return res.status(404).json({ error: "Patient profile not found" });
-      }
+      const [request] = await db.select().from(sponsorDependents).where(eq(sponsorDependents.id, requestId)).limit(1);
+      if (!request) return res.status(404).json({ error: "Sponsor request not found" });
+      if (request.dependentPatientId !== patient.id) return res.status(403).json({ error: "Only the dependent patient can approve or reject this request" });
+      if (request.status !== "pending") return res.status(400).json({ error: `This request has already been ${request.status}` });
 
-      const { data: request, error: requestError } = await supabase
-        .from("sponsor_dependents")
-        .select("*")
-        .eq("id", requestId)
-        .single();
+      const updates: any = { status: action === "approve" ? "approved" : "rejected" };
+      if (action === "approve") updates.approvedAt = new Date();
 
-      if (requestError || !request) {
-        return res.status(404).json({ error: "Sponsor request not found" });
-      }
+      const [updated] = await db.update(sponsorDependents).set(updates).where(eq(sponsorDependents.id, requestId)).returning();
 
-      if (request.dependent_patient_id !== patient.id) {
-        return res.status(403).json({ error: "Only the dependent patient can approve or reject this request" });
-      }
-
-      if (request.status !== 'pending') {
-        return res.status(400).json({ error: `This request has already been ${request.status}` });
-      }
-
-      const updates: Record<string, any> = {
-        status: action === 'approve' ? 'approved' : 'rejected',
-      };
-
-      if (action === 'approve') {
-        updates.approved_at = new Date().toISOString();
-      }
-
-      const { data: updated, error: updateError } = await supabase
-        .from("sponsor_dependents")
-        .update(updates)
-        .eq("id", requestId)
-        .select()
-        .single();
-
-      if (updateError) throw updateError;
-
-      res.json({
-        id: updated.id,
-        sponsorUserId: updated.sponsor_user_id,
-        dependentPatientId: updated.dependent_patient_id,
-        status: updated.status,
-        relationship: updated.relationship,
-        createdAt: updated.created_at,
-        approvedAt: updated.approved_at,
-        message: `Sponsor request ${action === 'approve' ? 'approved' : 'rejected'} successfully`,
-      });
+      res.json({ id: updated.id, sponsorUserId: updated.sponsorUserId, dependentPatientId: updated.dependentPatientId, status: updated.status, relationship: updated.relationship, createdAt: updated.createdAt, approvedAt: updated.approvedAt, message: `Sponsor request ${action === "approve" ? "approved" : "rejected"} successfully` });
     } catch (error: any) {
-      if (error?.code === 'PGRST205' || error?.code === '42P01') {
-        return res.status(503).json({ error: "Sponsor feature not yet available" });
-      }
       console.error("Error updating sponsor request:", error);
       res.status(500).json({ error: "Failed to update sponsor request" });
     }
   });
 
-  // 13. GET /api/patient/dependent/:patientId/dashboard
   app.get("/api/patient/dependent/:patientId/dashboard", authenticateUser, async (req, res) => {
     try {
       const userId = req.user!.id;
       const dependentPatientId = req.params.patientId;
 
-      const { data: sponsorAccess, error: sponsorError } = await supabase
-        .from("sponsor_dependents")
-        .select("*")
-        .eq("sponsor_user_id", userId)
-        .eq("dependent_patient_id", dependentPatientId)
-        .eq("status", "approved")
-        .single();
+      const [sponsorAccess] = await db.select().from(sponsorDependents)
+        .where(and(eq(sponsorDependents.sponsorUserId, userId), eq(sponsorDependents.dependentPatientId, dependentPatientId), eq(sponsorDependents.status, "approved")))
+        .limit(1);
+      if (!sponsorAccess) return res.status(403).json({ error: "You do not have approved access to this dependent's dashboard" });
 
-      if (sponsorError || !sponsorAccess) {
-        return res.status(403).json({ error: "You do not have approved access to this dependent's dashboard" });
+      const [patient] = await db.select().from(patients).where(eq(patients.id, dependentPatientId)).limit(1);
+      if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+      let riskData: any = null;
+      if (patient.userId) {
+        const [rs] = await db.select().from(riskScores).where(eq(riskScores.userId, patient.userId)).orderBy(desc(riskScores.generatedAt)).limit(1);
+        riskData = rs;
       }
 
-      const { data: patient, error: patientError } = await supabase
-        .from("patients")
-        .select("*")
-        .eq("id", dependentPatientId)
-        .single();
+      const depPatientUserId = patient.userId!;
+      const rawVitals = await db.select().from(healthReadings)
+        .where(and(eq(healthReadings.userId, depPatientUserId as any), gte(healthReadings.recordedAt, new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))))
+        .orderBy(desc(healthReadings.recordedAt));
 
-      if (patientError || !patient) {
-        return res.status(404).json({ error: "Patient not found" });
-      }
-
-      let riskScore: any = null;
-      if (patient.user_id) {
-        const { data: riskScoresData } = await supabase
-          .from("risk_scores")
-          .select("score, level, generated_at")
-          .eq("user_id", patient.user_id)
-          .order("generated_at", { ascending: false })
-          .limit(1);
-        riskScore = riskScoresData?.[0];
-      }
-
-      const depPatientUserId = patient.user_id;
-      const { data: rawVitals } = await supabase
-        .from("health_readings")
-        .select("*")
-        .eq("user_id", depPatientUserId)
-        .gte("recorded_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
-        .order("recorded_at", { ascending: false });
-
-      const transformVital = (v: any) => ({
-        id: v.id,
-        patientId: v.user_id,
-        type: toDisplayType(v.type),
-        value: v.value,
-        timestamp: v.recorded_at,
-      });
-
-      const recentVitals = rawVitals?.map(transformVital) || [];
-
+      const transformVital = (v: any) => ({ id: v.id, patientId: v.userId, type: toDisplayType(v.type), value: v.value, timestamp: v.recordedAt });
+      const recentVitals = rawVitals.map(transformVital);
       const vitalsByType: Record<string, any> = {};
-      recentVitals.forEach(v => {
-        if (!vitalsByType[v.type]) {
-          vitalsByType[v.type] = v;
-        }
-      });
+      recentVitals.forEach((v) => { if (!vitalsByType[v.type]) vitalsByType[v.type] = v; });
 
       let clinicianInfo = null;
-      if (patient.assigned_clinician_id) {
-        const { data: clinician } = await supabase
-          .from("users")
-          .select("id, email")
-          .eq("id", patient.assigned_clinician_id)
-          .single();
-
+      if (patient.assignedClinicianId) {
+        const [clinician] = await db.select({ id: users.id, email: users.email }).from(users).where(eq(users.id, patient.assignedClinicianId)).limit(1);
         if (clinician) {
-          const { data: profile } = await supabase
-            .from("clinician_profiles")
-            .select("full_name, specialty, phone")
-            .eq("user_id", clinician.id)
-            .single();
-
-          clinicianInfo = {
-            id: clinician.id,
-            email: clinician.email,
-            name: profile?.full_name || clinician.email.split('@')[0],
-            specialty: profile?.specialty || 'General Practice',
-            phone: profile?.phone || null,
-          };
+          const [cp] = await db.select().from(clinicianProfiles).where(eq(clinicianProfiles.userId, clinician.id)).limit(1);
+          clinicianInfo = { id: clinician.id, email: clinician.email, name: cp?.fullName || clinician.email.split("@")[0], specialty: cp?.specialty || "General Practice", phone: cp?.phone || null };
         }
       }
 
       let institutionInfo = null;
-      if (patient.hospital_id) {
-        const { data: institution } = await supabase
-          .from("institutions")
-          .select("id, name, address, contact_email, contact_phone")
-          .eq("id", patient.hospital_id)
-          .single();
-
-        if (institution) {
-          institutionInfo = {
-            id: institution.id,
-            name: institution.name,
-            address: institution.address,
-            contactEmail: institution.contact_email,
-            contactPhone: institution.contact_phone,
-          };
-        }
+      if (patient.hospitalId) {
+        const [institution] = await db.select().from(institutions).where(eq(institutions.id, patient.hospitalId)).limit(1);
+        if (institution) institutionInfo = { id: institution.id, name: institution.name, address: institution.address, contactEmail: institution.contactEmail, contactPhone: institution.contactPhone };
       }
 
-      const { data: rawAlerts } = await supabase
-        .from("alerts")
-        .select("id, alert_type, message, severity, is_resolved, triggered_at")
-        .eq("user_id", depPatientUserId)
-        .order("triggered_at", { ascending: false })
+      const rawAlerts = await db.select().from(alerts)
+        .where(eq(alerts.userId, depPatientUserId))
+        .orderBy(desc(alerts.triggeredAt))
         .limit(5);
 
-      const recentAlerts = rawAlerts?.map((a: any) => ({
-        id: a.id,
-        type: a.alert_type,
-        message: a.message,
-        severity: a.severity,
-        isRead: a.is_resolved,
-        timestamp: a.triggered_at,
-      })) || [];
+      const recentAlerts = rawAlerts.map((a) => ({ id: a.id, type: a.alertType, message: a.message, severity: a.severity, isRead: a.isResolved, timestamp: a.triggeredAt }));
 
       res.json({
         patient: {
           id: patient.id,
-          name: `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown',
-          age: patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : 0,
-          gender: patient.sex || 'N/A',
-          conditions: [],
-          riskScore: riskScore?.score || 0,
-          riskLevel: riskScore?.level || "low",
-          lastSync: riskScore?.generated_at || patient.created_at,
+          name: `${patient.firstName || ""} ${patient.lastName || ""}`.trim() || "Unknown",
+          age: calcAge(patient.dateOfBirth), gender: patient.sex || "N/A", conditions: [],
+          riskScore: riskData?.score || 0, riskLevel: riskData?.level || "low", lastSync: riskData?.generatedAt || patient.createdAt,
         },
-        latestVitals: vitalsByType,
-        recentVitals: recentVitals,
-        clinician: clinicianInfo,
-        institution: institutionInfo,
-        recentAlerts: recentAlerts,
+        latestVitals: vitalsByType, recentVitals, clinician: clinicianInfo, institution: institutionInfo, recentAlerts,
       });
     } catch (error: any) {
-      if (error?.code === 'PGRST205' || error?.code === '42P01') {
-        return res.status(404).json({ error: "Dependent data not available" });
-      }
       console.error("Error fetching dependent dashboard:", error);
       res.status(500).json({ error: "Failed to fetch dependent dashboard" });
     }
   });
 
   const httpServer = createServer(app);
-
   return httpServer;
 }

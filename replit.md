@@ -55,53 +55,42 @@ The VeriHealth platform consists of two separate web applications:
 - Development vs Production: Vite dev server proxies API requests in dev; static file serving in production
 
 **Database & ORM**
-- Supabase (PostgreSQL) for primary data storage
-- Drizzle ORM for type-safe database queries and migrations
-- Problem: Need real-time capabilities, authentication, and relational data modeling
-- Solution: Supabase provides managed PostgreSQL with real-time subscriptions and auth
-- Schema: Users, Patients, Conditions, HealthReadings, RiskScores, Alerts tables
+- Replit PostgreSQL (managed) for primary data storage
+- Drizzle ORM for type-safe database queries and schema management
+- Schema defined in `shared/schema.ts`; pushed with `npm run db:push`
+- Tables: users, user_profiles, patients, institutions, health_readings, risk_scores, alerts, clinician_profiles, activity_logs, user_invites, sponsor_dependents, file_attachments
 
 **API Design**
 - RESTful API endpoints under `/api` prefix
-- Routes handle patient lists, individual patient details, vital readings, and alerts
-- `POST /api/vitals/ingest` - Authenticated endpoint for patients to submit vital readings (manual or from mobile app)
-  - Accepts `{ readings: [{ type, value, recorded_at?, source? }] }` with batch limit of 100
+- Routes handle all features: auth, patients, vitals, alerts, admin, institutions, files, sponsors
+- `POST /api/vitals/ingest` - Patient vital readings with batch limit of 100
   - Valid types: Heart Rate, Blood Pressure Systolic/Diastolic, SpO2, Temperature, Weight, Steps, Sleep, HRV, Respiratory Rate, Blood Glucose, BMI
-  - Validates types against whitelist, numeric values, derives user_id from auth token (no impersonation)
-  - Stores to Supabase `health_readings` table with source default "manual"
+  - Validates types against whitelist, derives user_id from JWT token (no impersonation)
+- All Drizzle ORM queries in `server/routes.ts` — no Supabase client
 - Response format: JSON with proper HTTP status codes
 - Error handling: Centralized error logging with detailed error responses
-- Database: All operations use Supabase client directly (no Drizzle ORM queries, no Replit built-in DB)
-- `shared/schema.ts` uses Drizzle ORM + drizzle-zod for TypeScript type definitions only (not for DB queries)
 
 **Real-time Updates**
-- Polling-based approach (30-second intervals) as fallback
-- Designed for Supabase Realtime subscriptions (not yet fully implemented)
+- Polling-based approach (30-second intervals) via React Query
 - Problem: Clinicians need near real-time patient data updates
-- Solution: React Query cache invalidation on intervals; future upgrade to WebSocket-based Supabase Realtime
+- Solution: React Query cache invalidation on intervals; no external realtime dependency
 
 ### Authentication & Authorization
 
 **Authentication System**
-- Supabase Auth for user management with email/password
-- Email confirmation workflow (currently disabled pending domain verification)
-- Password reset via secure token system
+- Custom JWT-based authentication (jsonwebtoken, bcryptjs)
+- Tokens signed with `JWT_SECRET` env var, expire in 7 days
+- Token stored client-side in localStorage (`verihealth_auth_token`)
+- Client sends `Authorization: Bearer <token>` header on all API calls
+- Server verifies via `authenticateUser` middleware in `server/middleware/auth.ts`
+- Password hashing with bcryptjs (cost factor 12)
+- Password reset via secure random token stored in `users.passwordResetToken` (1 hour expiry)
 - Role-based access: patient, clinician, admin, institution_admin
-- Supabase native token verification (NOT custom JWT) via `supabase.auth.getUser(token)`
-- Google OAuth sign-in via Supabase Auth (requires Google provider enabled in Supabase dashboard)
-  - Frontend uses `@supabase/supabase-js` client with `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`
-  - OAuth callback handled at `/auth/callback` route
-  - Backend `/api/auth/google-callback` auto-creates user records for new Google users (default: patient role)
-  - Google sign-in available on Login and Register pages
-- Canonical role source: `public.user_profiles.role` (per Guardrail document)
-- The `users` table stores identity data (email, approval_status) only — NOT roles
-- `/api/session/check` endpoint returns `{ok, userId, role, institutionId}` from `user_profiles`
-- Patient role blocked from verihealth.com dashboard login (redirected to app.verihealths.com)
-- Rate limiting: All auth endpoints (login, register, verify-invite, logout, forgot-password, reset-password, resend-confirmation) rate limited to 10 requests per 15 minutes per IP
-- `requireApproved` middleware enforced on all clinician-accessible endpoints (patients, vitals, alerts, dashboard, claim, top-performers)
-- Client-side role enforcement: Admin pages use `allowedRoles` on ProtectedRoute; unauthorized roles redirect to dashboard (not logout)
-- Problem: Need secure, healthcare-compliant user authentication with consistent role source across all clients
-- Solution: Supabase Auth provides HIPAA-eligible authentication; `user_profiles` ensures single role source for dashboard, Median app, BLE, and WhatsApp clients
+- Canonical role source: `user_profiles.role` — NOT `users.role`
+- `/api/session/check` returns `{ok, userId, role, institutionId}`
+- Rate limiting: In-memory rate limiter on auth endpoints (10 requests per 15 min per IP)
+- `requireApproved` middleware enforced on clinician endpoints
+- Client-side role enforcement via `allowedRoles` on ProtectedRoute
 
 **Security Hardening (Applied Feb 2026)**
 - HTML sanitization in admin email feature (prevents XSS via email content)
