@@ -129,9 +129,9 @@ export default function Register() {
   };
 
   return (
-    <div className="min-h-screen w-full grid lg:grid-cols-2 bg-gradient-to-b from-sky-100 via-sky-50 to-white dark:from-sky-950 dark:via-slate-900 dark:to-slate-950">
+    <div className="min-h-screen w-full grid lg:grid-cols-2">
       {/* Left: Form */}
-      <div className="flex items-center justify-center p-8">
+      <div className="flex items-center justify-center p-8 bg-background">
         <div className="mx-auto w-full max-w-sm space-y-8">
           <div className="flex flex-col space-y-2 text-center lg:text-left">
             <div className="flex items-center justify-center lg:justify-start gap-2 mb-2">
@@ -340,33 +340,32 @@ export default function Register() {
       </div>
 
       {/* Right: Visual */}
-      <div className="hidden lg:flex flex-col justify-between p-12 relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-br from-sky-400 via-blue-500 to-indigo-600"></div>
-        <div className="absolute inset-0 opacity-20 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-white to-transparent"></div>
-        <div className="absolute bottom-0 left-0 right-0 h-1/3 bg-gradient-to-t from-sky-200/20 to-transparent"></div>
+      <div className="hidden lg:flex flex-col justify-between p-12 bg-sidebar text-sidebar-foreground relative overflow-hidden">
+        <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&q=80')] bg-cover bg-center opacity-10 mix-blend-overlay"></div>
+        <div className="absolute inset-0 bg-gradient-to-t from-sidebar via-sidebar/80 to-transparent"></div>
         
         <div className="relative z-10">
-          <div className="inline-flex items-center rounded-full bg-white/20 px-3 py-1 text-sm backdrop-blur-sm border border-white/30 text-white">
-            <UserPlus className="mr-2 h-4 w-4" />
+          <div className="inline-flex items-center rounded-full border border-sidebar-border bg-sidebar-accent/50 px-3 py-1 text-sm backdrop-blur-sm">
+            <UserPlus className="mr-2 h-4 w-4 text-primary" />
             Join VeriHealth Today
           </div>
         </div>
 
-        <div className="relative z-10 space-y-4 max-w-lg text-white">
+        <div className="relative z-10 space-y-4 max-w-lg">
           <h2 className="text-3xl font-heading font-bold">
             Start monitoring health with confidence
           </h2>
-          <ul className="space-y-3 text-white/80">
+          <ul className="space-y-3 text-sidebar-foreground/80">
             <li className="flex items-start gap-2">
-              <Activity className="h-5 w-5 text-white mt-0.5 flex-shrink-0" />
+              <Activity className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
               <span>Real-time vital signs monitoring</span>
             </li>
             <li className="flex items-start gap-2">
-              <Activity className="h-5 w-5 text-white mt-0.5 flex-shrink-0" />
+              <Activity className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
               <span>AI-powered risk detection</span>
             </li>
             <li className="flex items-start gap-2">
-              <Activity className="h-5 w-5 text-white mt-0.5 flex-shrink-0" />
+              <Activity className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
               <span>Secure and HIPAA compliant</span>
             </li>
           </ul>
