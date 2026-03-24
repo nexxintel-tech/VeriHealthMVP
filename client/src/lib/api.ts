@@ -491,6 +491,54 @@ export async function respondToAlert(alertId: string): Promise<Alert> {
 }
 
 // ============================================================
+// MEDICATIONS API
+// ============================================================
+
+export interface Medication {
+  id: number;
+  patientId: string;
+  name: string;
+  dosage: string | null;
+  frequency: string | null;
+  prescribedBy: string | null;
+  startDate: string | null;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export async function fetchPatientMedications(patientId: string): Promise<Medication[]> {
+  const response = await fetch(`/api/patients/${patientId}/medications`, {
+    headers: getAuthHeaders(),
+  });
+  if (response.status === 401) throw new Error("Unauthorized - please log in again");
+  if (response.status === 403) throw new Error("Access denied");
+  if (!response.ok) throw new Error("Failed to fetch medications");
+  return response.json();
+}
+
+export async function addPatientMedication(patientId: string, data: {
+  name: string;
+  dosage?: string;
+  frequency?: string;
+  prescribedBy?: string;
+  startDate?: string;
+  isActive?: boolean;
+}): Promise<Medication> {
+  const response = await fetch(`/api/patients/${patientId}/medications`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(data),
+  });
+  if (response.status === 401) throw new Error("Unauthorized - please log in again");
+  if (response.status === 403) throw new Error("Access denied");
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error || "Failed to add medication");
+  }
+  return response.json();
+}
+
+// ============================================================
 // SUPER ADMIN API
 // ============================================================
 

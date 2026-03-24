@@ -164,6 +164,23 @@ export const userProfiles = pgTable("user_profiles", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+export const medications = pgTable("medications", {
+  id: serial("id").primaryKey(),
+  patientId: varchar("patient_id").notNull(),
+  name: text("name").notNull(),
+  dosage: text("dosage"),
+  frequency: text("frequency"),
+  prescribedBy: text("prescribed_by"),
+  startDate: date("start_date"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertMedicationSchema = createInsertSchema(medications).omit({
+  id: true,
+  createdAt: true,
+});
+
 export const insertPatientSchema = createInsertSchema(patients).omit({
   id: true,
   createdAt: true,
@@ -233,3 +250,5 @@ export type InsertSponsorDependent = z.infer<typeof insertSponsorDependentSchema
 export type FileAttachment = typeof fileAttachments.$inferSelect;
 export type InsertFileAttachment = z.infer<typeof insertFileAttachmentSchema>;
 export type UserProfile = typeof userProfiles.$inferSelect;
+export type Medication = typeof medications.$inferSelect;
+export type InsertMedication = z.infer<typeof insertMedicationSchema>;

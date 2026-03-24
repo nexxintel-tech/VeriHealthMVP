@@ -6,7 +6,7 @@ import { db } from "./db";
 import {
   users, userProfiles, patients, institutions, healthReadings,
   riskScores, alerts, clinicianProfiles, activityLogs, userInvites,
-  sponsorDependents, fileAttachments,
+  sponsorDependents, fileAttachments, conditions, medications,
 } from "../shared/schema";
 import { eq, and, inArray, isNull, desc, asc, gte, lt, ne, count, sql, or } from "drizzle-orm";
 import { authenticateUser, requireRole, requireApproved, signToken } from "./middleware/auth";
@@ -576,6 +576,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }, {} as Record<string, any>);
       }
 
+      const allConditions = await db.select().from(conditions);
+      const conditionMap = allConditions.reduce((acc, c) => { acc[c.id] = c.name; return acc; }, {} as Record<number, string>);
+
+      const allRiskScoresForConditions = patientUserIds.length > 0
+        ? await db.select({ userId: riskScores.userId, conditionId: riskScores.conditionId })
+            .from(riskScores)
+            .where(inArray(riskScores.userId, patientUserIds))
+        : [];
+
+      const conditionsByUserId: Record<string, string[]> = {};
+      allRiskScoresForConditions.forEach((rs) => {
+        if (rs.userId && rs.conditionId) {
+          if (!conditionsByUserId[rs.userId]) conditionsByUserId[rs.userId] = [];
+          const condName = conditionMap[rs.conditionId];
+          if (condName && !conditionsByUserId[rs.userId].includes(condName)) {
+            conditionsByUserId[rs.userId].push(condName);
+          }
+        }
+      });
+
       const transformedPatients = patientList.map((patient) => {
         const riskData = patient.userId ? latestRiskByUserId[patient.userId] : null;
         return {
@@ -583,7 +603,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           name: `${patient.firstName || ""} ${patient.lastName || ""}`.trim() || "Unknown",
           age: calcAge(patient.dateOfBirth),
           gender: patient.sex || "N/A",
-          conditions: [],
+          conditions: patient.userId ? (conditionsByUserId[patient.userId] || []) : [],
           riskScore: riskData?.score || 0,
           riskLevel: riskData?.level || "low",
           lastSync: riskData?.generatedAt || patient.createdAt,
@@ -619,12 +639,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       let riskData: any = null;
+      let patientConditions: string[] = [];
       if (patient.userId) {
         const [rs] = await db.select().from(riskScores)
           .where(eq(riskScores.userId, patient.userId))
           .orderBy(desc(riskScores.generatedAt))
           .limit(1);
         riskData = rs;
+
+        const patientRiskScores = await db.select({ conditionId: riskScores.conditionId })
+          .from(riskScores)
+          .where(eq(riskScores.userId, patient.userId));
+        const conditionIdSet = new Set(patientRiskScores.map((r) => r.conditionId).filter(Boolean) as number[]);
+        const conditionIds = Array.from(conditionIdSet);
+        if (conditionIds.length > 0) {
+          const condList = await db.select({ id: conditions.id, name: conditions.name })
+            .from(conditions)
+            .where(inArray(conditions.id, conditionIds));
+          patientConditions = condList.map((c) => c.name);
+        }
       }
 
       res.json({
@@ -632,7 +665,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         name: `${patient.firstName || ""} ${patient.lastName || ""}`.trim() || "Unknown",
         age: calcAge(patient.dateOfBirth),
         gender: patient.sex || "N/A",
-        conditions: [],
+        conditions: patientConditions,
         riskScore: riskData?.score || 0,
         riskLevel: riskData?.level || "low",
         lastSync: riskData?.generatedAt || patient.createdAt,
@@ -691,6 +724,79 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching vitals:", error);
       res.status(500).json({ error: "Failed to fetch vitals" });
+    }
+  });
+
+  // ============================================================
+  // MEDICATIONS
+  // ============================================================
+
+  app.get("/api/patients/:id/medications", authenticateUser, requireRole("clinician", "admin", "institution_admin"), requireApproved, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user!.id;
+      const userRole = req.user!.role;
+      const userInstitutionId = resolveInstitutionScope(req.user!.institutionId);
+
+      const [patient] = await db.select({ assignedClinicianId: patients.assignedClinicianId, hospitalId: patients.hospitalId })
+        .from(patients).where(eq(patients.id, id)).limit(1);
+      if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+      if (userRole === "clinician" && patient.assignedClinicianId !== userId) {
+        return res.status(403).json({ error: "Access denied - patient not assigned to you" });
+      }
+      if (userRole === "institution_admin" && String(patient.hospitalId) !== String(userInstitutionId)) {
+        return res.status(403).json({ error: "Access denied - patient not in your institution" });
+      }
+
+      const medList = await db.select().from(medications)
+        .where(eq(medications.patientId, id))
+        .orderBy(desc(medications.createdAt));
+
+      res.json(medList);
+    } catch (error) {
+      console.error("Error fetching medications:", error);
+      res.status(500).json({ error: "Failed to fetch medications" });
+    }
+  });
+
+  app.post("/api/patients/:id/medications", authenticateUser, requireRole("clinician", "admin", "institution_admin"), requireApproved, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user!.id;
+      const userRole = req.user!.role;
+      const userInstitutionId = resolveInstitutionScope(req.user!.institutionId);
+
+      const [patient] = await db.select({ assignedClinicianId: patients.assignedClinicianId, hospitalId: patients.hospitalId })
+        .from(patients).where(eq(patients.id, id)).limit(1);
+      if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+      if (userRole === "clinician" && patient.assignedClinicianId !== userId) {
+        return res.status(403).json({ error: "Access denied - patient not assigned to you" });
+      }
+      if (userRole === "institution_admin" && String(patient.hospitalId) !== String(userInstitutionId)) {
+        return res.status(403).json({ error: "Access denied - patient not in your institution" });
+      }
+
+      const { name, dosage, frequency, prescribedBy, startDate, isActive } = req.body;
+      if (!name || typeof name !== "string" || !name.trim()) {
+        return res.status(400).json({ error: "Medication name is required" });
+      }
+
+      const [medication] = await db.insert(medications).values({
+        patientId: id,
+        name: name.trim(),
+        dosage: dosage || null,
+        frequency: frequency || null,
+        prescribedBy: prescribedBy || null,
+        startDate: startDate || null,
+        isActive: isActive !== undefined ? Boolean(isActive) : true,
+      }).returning();
+
+      res.json(medication);
+    } catch (error) {
+      console.error("Error creating medication:", error);
+      res.status(500).json({ error: "Failed to create medication" });
     }
   });
 
@@ -847,7 +953,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         let avgPerformanceScore = 0;
 
         if (approvedClinicianIds.length > 0) {
-          const respondedAlertList = await db.select({ respondedById: alerts.respondedById, triggeredAt: alerts.triggeredAt, respondedAt: alerts.respondedAt })
+          const respondedAlertList = await db.select({ respondedById: alerts.respondedById, triggeredAt: alerts.triggeredAt, respondedAt: alerts.respondedAt, isResolved: alerts.isResolved })
             .from(alerts)
             .where(and(inArray(alerts.respondedById, approvedClinicianIds)));
 
@@ -856,10 +962,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
             .map((a) => new Date(a.respondedAt!).getTime() - new Date(a.triggeredAt!).getTime())
             .filter((t) => t > 0);
 
+          const totalRespondedAlerts = respondedAlertList.length;
+          const resolvedAlerts = respondedAlertList.filter((a) => a.isResolved).length;
+          const alertResolutionRate = totalRespondedAlerts > 0 ? resolvedAlerts / totalRespondedAlerts : 0;
+
+          let responseTimeScore = 0;
           if (responseTimes.length > 0) {
             const avgResponseMs = responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length;
-            avgPerformanceScore = Math.max(0, Math.round(100 - (avgResponseMs / 60000 / 5) * 20));
+            responseTimeScore = Math.max(0, 40 - (avgResponseMs / 60000 / 5) * 8);
           }
+
+          avgPerformanceScore = Math.max(0, Math.round(responseTimeScore + alertResolutionRate * 60));
         }
 
         return res.json({ totalClinicians, approvedClinicians, pendingApprovals, avgPerformanceScore, isClinicianView: true });
@@ -1137,7 +1250,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         patientCount = Number(value);
       }
 
-      res.json({ ...user, role, institution_id: institutionId, profile, institution, patientCount, lastSignIn: null, isBanned: false });
+      res.json({ ...user, role, institution_id: institutionId, profile, institution, patientCount });
     } catch (error) {
       console.error("Error fetching user details:", error);
       res.status(500).json({ error: "Failed to fetch user details" });
@@ -1520,16 +1633,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(clinicianProfiles).where(inArray(clinicianProfiles.userId, clinicianIds));
       const profilesByUserId = profiles.reduce((acc, p) => { acc[p.userId] = p; return acc; }, {} as Record<string, any>);
 
-      const respondedAlertList = await db.select({ id: alerts.id, respondedById: alerts.respondedById, triggeredAt: alerts.triggeredAt, respondedAt: alerts.respondedAt })
-        .from(alerts).limit(1000);
+      const allAlertList = await db.select({ id: alerts.id, respondedById: alerts.respondedById, triggeredAt: alerts.triggeredAt, respondedAt: alerts.respondedAt, isResolved: alerts.isResolved, userId: alerts.userId })
+        .from(alerts).limit(2000);
 
       const responseTimesByClinicianId: Record<string, number[]> = {};
-      respondedAlertList.forEach((alert) => {
-        if (alert.respondedById && alert.respondedAt && alert.triggeredAt) {
-          const responseTimeMs = new Date(alert.respondedAt).getTime() - new Date(alert.triggeredAt).getTime();
-          if (responseTimeMs > 0) {
-            if (!responseTimesByClinicianId[alert.respondedById]) responseTimesByClinicianId[alert.respondedById] = [];
-            responseTimesByClinicianId[alert.respondedById].push(responseTimeMs);
+      const totalAlertsByClinicianId: Record<string, number> = {};
+      const resolvedAlertsByClinicianId: Record<string, number> = {};
+
+      allAlertList.forEach((alert) => {
+        if (alert.respondedById) {
+          if (!totalAlertsByClinicianId[alert.respondedById]) totalAlertsByClinicianId[alert.respondedById] = 0;
+          totalAlertsByClinicianId[alert.respondedById]++;
+          if (alert.isResolved) {
+            if (!resolvedAlertsByClinicianId[alert.respondedById]) resolvedAlertsByClinicianId[alert.respondedById] = 0;
+            resolvedAlertsByClinicianId[alert.respondedById]++;
+          }
+          if (alert.respondedAt && alert.triggeredAt) {
+            const responseTimeMs = new Date(alert.respondedAt).getTime() - new Date(alert.triggeredAt).getTime();
+            if (responseTimeMs > 0) {
+              if (!responseTimesByClinicianId[alert.respondedById]) responseTimesByClinicianId[alert.respondedById] = [];
+              responseTimesByClinicianId[alert.respondedById].push(responseTimeMs);
+            }
           }
         }
       });
@@ -1538,6 +1662,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
       Object.entries(responseTimesByClinicianId).forEach(([cId, times]) => {
         avgResponseTimeByClinicianId[cId] = times.reduce((a, b) => a + b, 0) / times.length;
       });
+
+      const clinicianPatientsList = await db.select({ assignedClinicianId: patients.assignedClinicianId, userId: patients.userId })
+        .from(patients)
+        .where(inArray(patients.assignedClinicianId, clinicianIds));
+
+      const patientUserIdsByClinicianId: Record<string, string[]> = {};
+      clinicianPatientsList.forEach((p) => {
+        if (p.assignedClinicianId && p.userId) {
+          if (!patientUserIdsByClinicianId[p.assignedClinicianId]) patientUserIdsByClinicianId[p.assignedClinicianId] = [];
+          patientUserIdsByClinicianId[p.assignedClinicianId].push(p.userId);
+        }
+      });
+
+      const allPatientUserIds = Object.values(patientUserIdsByClinicianId).flat();
+      let allRiskScoresForOutcome: any[] = [];
+      if (allPatientUserIds.length > 0) {
+        allRiskScoresForOutcome = await db.select({ userId: riskScores.userId, level: riskScores.level, generatedAt: riskScores.generatedAt })
+          .from(riskScores)
+          .where(inArray(riskScores.userId, allPatientUserIds))
+          .orderBy(asc(riskScores.generatedAt));
+      }
+
+      const riskScoresByUserId: Record<string, { earliest: string; latest: string }> = {};
+      allRiskScoresForOutcome.forEach((rs) => {
+        if (!rs.userId) return;
+        if (!riskScoresByUserId[rs.userId]) {
+          riskScoresByUserId[rs.userId] = { earliest: rs.level, latest: rs.level };
+        } else {
+          riskScoresByUserId[rs.userId].latest = rs.level;
+        }
+      });
+
+      const riskLevelOrder: Record<string, number> = { low: 0, medium: 1, high: 2 };
 
       const topPerformers = approvedClinicianUsers.map((clinician) => {
         const profile = profilesByUserId[clinician.id];
@@ -1551,8 +1708,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
           avgResponseTime = hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
         }
 
+        const responseTotalForClinician = totalAlertsByClinicianId[clinician.id] || 0;
+        const resolvedForClinician = resolvedAlertsByClinicianId[clinician.id] || 0;
+        const alertResolutionRate = responseTotalForClinician > 0 ? resolvedForClinician / responseTotalForClinician : 0;
+
         let performanceScore = 0;
-        if (avgResponseMs) performanceScore += Math.max(0, 50 - (avgResponseMs / 60000 / 5) * 10);
+        if (avgResponseMs) performanceScore += Math.max(0, 40 - (avgResponseMs / 60000 / 5) * 8);
+        performanceScore += alertResolutionRate * 60;
+
+        const patientUserIds = patientUserIdsByClinicianId[clinician.id] || [];
+        let improvedCount = 0;
+        patientUserIds.forEach((uid) => {
+          const rsData = riskScoresByUserId[uid];
+          if (rsData && (riskLevelOrder[rsData.latest] ?? 0) < (riskLevelOrder[rsData.earliest] ?? 0)) {
+            improvedCount++;
+          }
+        });
+        const patientOutcomeRate = patientUserIds.length > 0 ? Math.round((improvedCount / patientUserIds.length) * 100) : 0;
 
         return {
           id: clinician.id,
@@ -1561,7 +1733,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           avgResponseTime,
           avgResponseTimeMs: avgResponseMs || null,
           alertsRespondedTo,
-          patientOutcomeRate: 0,
+          patientOutcomeRate,
           performanceScore: Math.round(performanceScore),
         };
       });
