@@ -46,9 +46,9 @@ export default function ForgotPassword() {
   };
 
   return (
-    <div className="min-h-screen w-full grid lg:grid-cols-2">
+    <div className="min-h-screen w-full grid lg:grid-cols-2 bg-gradient-to-b from-sky-100 via-sky-50 to-white dark:from-sky-950 dark:via-slate-900 dark:to-slate-950">
       {/* Left: Form */}
-      <div className="flex items-center justify-center p-8 bg-background">
+      <div className="flex items-center justify-center p-8">
         <div className="mx-auto w-full max-w-sm space-y-8">
           <div className="flex flex-col space-y-2 text-center lg:text-left">
             <div className="flex items-center justify-center lg:justify-start gap-2 mb-2">
@@ -137,15 +137,16 @@ export default function ForgotPassword() {
       </div>
 
       {/* Right: Visual */}
-      <div className="hidden lg:flex flex-col justify-center p-12 bg-sidebar text-sidebar-foreground relative overflow-hidden">
-        <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&q=80')] bg-cover bg-center opacity-10 mix-blend-overlay"></div>
-        <div className="absolute inset-0 bg-gradient-to-t from-sidebar via-sidebar/80 to-transparent"></div>
+      <div className="hidden lg:flex flex-col justify-center p-12 relative overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-br from-sky-400 via-blue-500 to-indigo-600"></div>
+        <div className="absolute inset-0 opacity-20 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-white to-transparent"></div>
+        <div className="absolute bottom-0 left-0 right-0 h-1/3 bg-gradient-to-t from-sky-200/20 to-transparent"></div>
         
-        <div className="relative z-10 space-y-4 max-w-lg">
+        <div className="relative z-10 space-y-4 max-w-lg text-white">
           <h2 className="text-3xl font-heading font-bold">
             We'll help you get back in
           </h2>
-          <p className="text-lg text-sidebar-foreground/80">
+          <p className="text-lg text-white/80">
             Enter your email address and we'll send you instructions to reset your password
             and regain access to your account.
           </p>

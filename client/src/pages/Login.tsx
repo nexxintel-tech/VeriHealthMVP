@@ -13,7 +13,7 @@ export default function Login() {
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
   const [isResendingConfirmation, setIsResendingConfirmation] = useState(false);
-  const [email, setEmail] = useState("clinician@verihealth.com");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showResendConfirmation, setShowResendConfirmation] = useState(false);
   const [unconfirmedEmail, setUnconfirmedEmail] = useState("");
@@ -138,10 +138,10 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen w-full grid lg:grid-cols-2 bg-gradient-to-br from-teal-50 via-white to-indigo-50">
+    <div className="min-h-screen w-full grid lg:grid-cols-2 bg-gradient-to-b from-sky-100 via-sky-50 to-white dark:from-sky-950 dark:via-slate-900 dark:to-slate-950">
       {/* Left: Form */}
       <div className="flex items-center justify-center p-8">
-        <div className="mx-auto w-full max-w-md space-y-8 bg-white/70 dark:bg-black/40 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/40">
+        <div className="mx-auto w-full max-w-md space-y-8 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-white/40 dark:border-slate-700/40">
           <div className="flex flex-col space-y-2 text-center lg:text-left">
             <div className="flex items-center justify-center lg:justify-start gap-3 mb-2">
               <div className="h-10 w-10 rounded-lg bg-gradient-to-tr from-teal-400 to-indigo-600 flex items-center justify-center text-white shadow-md">
@@ -344,15 +344,6 @@ export default function Login() {
             </p>
           </div>
 
-          <div className="bg-gradient-to-r from-indigo-50 to-teal-50 p-4 rounded-lg border border-indigo-100">
-            <h4 className="text-sm font-medium mb-2">Demo Credentials</h4>
-            <div className="text-xs text-muted-foreground space-y-1">
-              <p><strong>Clinician:</strong> clinician@verihealth.com</p>
-              <p><strong>Patient:</strong> patient1@example.com</p>
-              <p className="text-xs opacity-75">(You'll need to set up users in Supabase first)</p>
-            </div>
-          </div>
-
           <p className="px-8 text-center text-sm text-muted-foreground">
             By clicking continue, you agree to our{" "}
             <a href="#" className="underline underline-offset-4 hover:text-primary">
@@ -369,8 +360,9 @@ export default function Login() {
 
       {/* Right: Visual */}
       <div className="hidden lg:flex flex-col justify-between p-12 relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-br from-indigo-500 via-teal-400 to-indigo-600 opacity-90 transform -skew-x-6 -translate-x-12"></div>
-        <div className="absolute inset-0 opacity-30 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-white to-transparent"></div>
+        <div className="absolute inset-0 bg-gradient-to-br from-sky-400 via-blue-500 to-indigo-600"></div>
+        <div className="absolute inset-0 opacity-20 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-white to-transparent"></div>
+        <div className="absolute bottom-0 left-0 right-0 h-1/3 bg-gradient-to-t from-sky-200/20 to-transparent"></div>
         <div className="relative z-10">
           <div className="inline-flex items-center rounded-full bg-white/20 px-3 py-1 text-sm backdrop-blur-sm border border-white/30">
             <ShieldCheck className="mr-2 h-4 w-4 text-white" />
