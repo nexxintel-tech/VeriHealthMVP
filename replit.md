@@ -4,7 +4,7 @@
 
 VeriHealth is a cross-platform medical remote monitoring system designed to collect health data from iOS (HealthKit) and Android (Health Connect) devices, sync it to a cloud database in real-time, and provide clinicians with AI-powered risk insights through a comprehensive dashboard. The system supports continuous monitoring of 16+ medical conditions using vitals and behavioral metrics, with automated alerts and notifications.
 
-The current implementation is a **web-based clinician dashboard** built with React, Express, and Supabase. The mobile apps (iOS Swift + HealthKit, Android Kotlin + Health Connect) are planned but not yet implemented in this codebase.
+The current implementation is a **web-based clinician dashboard** built with React, Express, Drizzle ORM, and Replit PostgreSQL. The mobile apps (iOS Swift + HealthKit, Android Kotlin + Health Connect) are planned but not yet implemented in this codebase.
 
 ## User Preferences
 
@@ -153,6 +153,18 @@ The VeriHealth platform consists of two separate web applications:
 - Daily activity line chart
 - Summary statistics: total users, role counts, institution count
 
+### Auth Pages UI (March 2026)
+
+All authentication pages share a single `AuthLayout` component (`client/src/components/auth/AuthLayout.tsx`) with:
+- **Desktop:** Two-column split — form panel (left) + auto-sliding visual panel (right)
+- **Mobile:** Single-column with a 4px teal→indigo brand stripe at the top
+- **Slideshow:** 4 smart health monitoring images (`attached_assets/auth-bg-{1-4}.png`) cross-fade every 5s with Ken Burns zoom; dot indicators allow manual navigation
+- **Gradient overlay:** `from-teal-900/65 via-teal-800/45 to-indigo-900/75` on top of images keeps text legible
+- **Forms:** `h-12` inputs with `rounded-xl`, teal focus rings, password strength indicator on Register/ClinicianRegister/ResetPassword
+- **Removed:** All Supabase social OAuth buttons (Google/Facebook/X) — OAuth not wired post-migration
+- **Fixed:** ConfirmEmail no longer writes `supabase.auth.token` to localStorage; reads `?token=` query param and calls `/api/auth/confirm-email`
+- **Fixed:** ResetPassword reads token from `?token=` query param first, URL hash as fallback
+
 ### Design Patterns
 
 **Separation of Concerns**
@@ -171,11 +183,11 @@ The VeriHealth platform consists of two separate web applications:
 
 ### Third-Party Services
 
-**Supabase**
-- Purpose: Managed PostgreSQL database, authentication, and real-time subscriptions
-- Integration: `@supabase/supabase-js` client library
-- Environment variables: `SUPABASE_URL`, `SUPABASE_ANON_KEY`
-- Critical for: All persistent data storage, user authentication, real-time features
+**Replit PostgreSQL + Drizzle ORM**
+- Purpose: Primary database — fully migrated from Supabase (March 2026)
+- Integration: `drizzle-orm` with `pg` driver; schema in `shared/schema.ts`
+- Environment variables: `DATABASE_URL` (auto-managed by Replit)
+- Auth: Custom JWT (`jsonwebtoken` + `bcryptjs`); token stored as `verihealth_auth_token` in localStorage
 
 **Resend**
 - Purpose: Transactional email delivery (confirmation emails, password resets)
