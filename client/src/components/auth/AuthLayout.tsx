@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { ShieldCheck } from "lucide-react";
-import bg1 from "@assets/auth-bg-1.png";
-import bg2 from "@assets/auth-bg-2.png";
-import bg3 from "@assets/auth-bg-3.png";
-import bg4 from "@assets/auth-bg-4.png";
+import bg1 from "@assets/stock_images/nigerian_family_heal_8832232c.jpg";
+import bg2 from "@assets/stock_images/nigerian_family_heal_a115db82.jpg";
+import bg3 from "@assets/stock_images/nigerian_young_adult_d252fcea.jpg";
+import bg4 from "@assets/stock_images/nigerian_young_adult_159b18b6.jpg";
 
 const slides = [
   {
