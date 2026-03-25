@@ -8,23 +8,23 @@ import bg4 from "@assets/auth-bg-4.png";
 const slides = [
   {
     image: bg1,
-    label: "Nigerian Savanna",
-    caption: "A winding path through the golden savanna at dusk",
+    label: "Smart Monitoring",
+    caption: "Clinicians reviewing real-time patient vitals on smart devices",
   },
   {
     image: bg2,
-    label: "River Delta",
-    caption: "Mist rising over a serene mangrove waterway at dawn",
+    label: "Wearable Health",
+    caption: "Live ECG and SpO₂ data streaming from a wearable health monitor",
   },
   {
     image: bg3,
-    label: "Jos Plateau",
-    caption: "Rolling green hills and wildflowers of the Jos Plateau",
+    label: "Command Centre",
+    caption: "A remote patient monitoring hub tracking multiple patients simultaneously",
   },
   {
     image: bg4,
-    label: "Rainforest Falls",
-    caption: "A cascading waterfall deep in Nigeria's tropical rainforest",
+    label: "Mobile Care",
+    caption: "Healthcare providers managing patient health data on-the-go",
   },
 ];
 
