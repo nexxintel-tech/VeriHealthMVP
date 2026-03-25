@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, Activity } from "lucide-react";
+import AuthLayout from "@/components/auth/AuthLayout";
 
 export default function ConfirmEmail() {
   const [, setLocation] = useLocation();
@@ -12,35 +12,38 @@ export default function ConfirmEmail() {
   useEffect(() => {
     const confirmEmail = async () => {
       try {
-        // Get the hash params from URL (Supabase sends them there)
-        const hashParams = new URLSearchParams(window.location.hash.substring(1));
-        const accessToken = hashParams.get("access_token");
-        const refreshToken = hashParams.get("refresh_token");
-        const type = hashParams.get("type");
+        const searchParams = new URLSearchParams(window.location.search);
+        const queryToken = searchParams.get("token");
 
-        if (!accessToken || !refreshToken) {
+        const hashParams = new URLSearchParams(window.location.hash.substring(1));
+        const hashToken = hashParams.get("access_token");
+
+        const token = queryToken || hashToken;
+
+        if (!token) {
           setStatus("error");
           setMessage("Invalid confirmation link. Please try requesting a new one.");
           return;
         }
 
-        // Store the session
-        localStorage.setItem("supabase.auth.token", JSON.stringify({
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        }));
+        const response = await fetch(`/api/auth/confirm-email?token=${encodeURIComponent(token)}`, {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+        });
+
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || "Confirmation failed");
+        }
 
         setStatus("success");
-        setMessage("Your email has been confirmed successfully! Redirecting to login...");
+        setMessage("Your email has been confirmed. Redirecting to login…");
 
-        // Redirect to login after 2 seconds
-        setTimeout(() => {
-          setLocation("/login");
-        }, 2000);
+        setTimeout(() => setLocation("/login"), 2500);
       } catch (error: any) {
         console.error("Email confirmation error:", error);
         setStatus("error");
-        setMessage("Failed to confirm email. Please try again or contact support.");
+        setMessage(error.message || "Failed to confirm email. Please try again or contact support.");
       }
     };
 
@@ -48,43 +51,87 @@ export default function ConfirmEmail() {
   }, [setLocation]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center">
-          <div className="flex justify-center mb-4">
-            {status === "loading" && <Loader2 className="h-12 w-12 text-blue-600 animate-spin" />}
-            {status === "success" && <CheckCircle2 className="h-12 w-12 text-green-600" />}
-            {status === "error" && <XCircle className="h-12 w-12 text-red-600" />}
+    <AuthLayout
+      panelQuote="Every confirmed account is a step closer to safer, more connected patient care."
+      panelAuthor="VeriHealth Platform"
+    >
+      <div className="space-y-7">
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-xl bg-gradient-to-tr from-teal-400 to-indigo-600 flex items-center justify-center text-white shadow-md">
+            <Activity className="h-5 w-5" />
           </div>
-          <CardTitle>
-            {status === "loading" && "Confirming your email..."}
-            {status === "success" && "Email Confirmed!"}
-            {status === "error" && "Confirmation Failed"}
-          </CardTitle>
-          <CardDescription>{message}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {status === "error" && (
-            <div className="space-y-2">
-              <Button
-                onClick={() => setLocation("/login")}
-                className="w-full"
-                data-testid="button-goto-login"
-              >
-                Go to Login
-              </Button>
-              <Button
-                onClick={() => setLocation("/register")}
-                variant="outline"
-                className="w-full"
-                data-testid="button-goto-register"
-              >
-                Create New Account
-              </Button>
+          <span className="font-heading font-bold text-xl tracking-tight">VeriHealth</span>
+        </div>
+
+        <div className="flex flex-col items-center justify-center py-8 space-y-5">
+          {status === "loading" && (
+            <div className="h-20 w-20 rounded-full bg-teal-50 flex items-center justify-center">
+              <Loader2 className="h-9 w-9 text-teal-500 animate-spin" />
             </div>
           )}
-        </CardContent>
-      </Card>
-    </div>
+          {status === "success" && (
+            <div className="h-20 w-20 rounded-full bg-green-50 flex items-center justify-center">
+              <CheckCircle2 className="h-9 w-9 text-green-600" />
+            </div>
+          )}
+          {status === "error" && (
+            <div className="h-20 w-20 rounded-full bg-red-50 flex items-center justify-center">
+              <XCircle className="h-9 w-9 text-red-500" />
+            </div>
+          )}
+
+          <div className="text-center space-y-2">
+            <h1 className="text-2xl font-heading font-bold tracking-tight text-foreground">
+              {status === "loading" && "Confirming your email…"}
+              {status === "success" && "Email Confirmed!"}
+              {status === "error" && "Confirmation Failed"}
+            </h1>
+            <p className="text-sm text-muted-foreground max-w-xs">{message}</p>
+          </div>
+
+          {status === "success" && (
+            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-teal-400 to-indigo-600 rounded-full"
+                style={{ animation: "progress 2.5s linear forwards" }}
+              />
+            </div>
+          )}
+        </div>
+
+        {status === "error" && (
+          <div className="space-y-3">
+            <Button
+              onClick={() => setLocation("/login")}
+              className="w-full h-12 text-base font-semibold bg-gradient-to-r from-teal-400 to-indigo-600 text-white hover:from-teal-500 hover:to-indigo-700 shadow-md hover:shadow-lg transition-all duration-200 rounded-xl"
+              data-testid="button-goto-login"
+            >
+              Go to Login
+            </Button>
+            <Button
+              onClick={() => setLocation("/register")}
+              variant="outline"
+              className="w-full h-12 rounded-xl"
+              data-testid="button-goto-register"
+            >
+              Create New Account
+            </Button>
+          </div>
+        )}
+
+        {status === "loading" && (
+          <p className="text-center text-xs text-muted-foreground/70">
+            This usually takes just a moment…
+          </p>
+        )}
+      </div>
+
+      <style>{`
+        @keyframes progress {
+          from { width: 0%; }
+          to { width: 100%; }
+        }
+      `}</style>
+    </AuthLayout>
   );
 }
