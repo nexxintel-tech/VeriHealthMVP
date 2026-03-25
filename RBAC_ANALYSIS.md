@@ -29,9 +29,9 @@ The system defines three user roles:
 | Endpoint | Method | Roles | Description | Current Implementation |
 |----------|--------|-------|-------------|----------------------|
 | `/api/auth/me` | GET | All | Get current user info | ✅ Working |
-| `/api/patients` | GET | All | Get patients list | ⚠️ No role filtering (missing user_id column) |
-| `/api/patients/:id` | GET | All | Get single patient details | ⚠️ No role filtering (missing user_id column) |
-| `/api/patients/:id/vitals` | GET | All | Get patient vital readings | ⚠️ No role filtering (missing user_id column) |
+| `/api/patients` | GET | clinician, admin, institution_admin | Get patients list | ✅ Properly protected |
+| `/api/patients/:id` | GET | clinician, admin, institution_admin | Get single patient details | ✅ Properly protected |
+| `/api/patients/:id/vitals` | GET | clinician, admin, institution_admin | Get patient vital readings | ✅ Properly protected |
 
 #### Clinician/Admin Only
 | Endpoint | Method | Roles | Description | Status |
@@ -42,26 +42,15 @@ The system defines three user roles:
 
 ## Issues & Inconsistencies
 
-### ❌ Critical: Missing Row-Level Security (RLS)
+### ✅ Critical: Row-Level Security (RLS) Implemented
 
-**Problem:** The `patients` table does not have a `user_id` column to link patients to user accounts.
+**Status:** The `patients` table has a `user_id` column linking patients to user accounts.
 
-**Impact:**
-- Patient role users can see ALL patients (should only see their own data)
-- Clinician role users correctly see all patients
-- Security vulnerability: patients can access other patients' data
-
-**Current Workaround:** TODOs added in code, but filtering is disabled:
-```typescript
-// Note: user_id column doesn't exist in current schema
-// For now, all users can see all patients
-// TODO: Add user_id column to patients table for proper RLS
-```
-
-**Fix Required:**
-1. Add `user_id` column to `patients` table
-2. Update patient creation to link to user accounts
-3. Re-enable role-based filtering in `/api/patients` endpoints
+**Implementation:**
+- Patient routes require `requireRole("clinician", "admin", "institution_admin")`
+- Clinicians can only see patients assigned to them (`assignedClinicianId`)
+- Institution admins can only see patients in their institution (`hospitalId`)
+- Patients have their own dedicated endpoints (`/api/patient/*`) for accessing their own data
 
 ### ⚠️ Frontend-Backend Consistency
 
@@ -75,9 +64,9 @@ The system defines three user roles:
 - Patients: Accessible to all but should filter by role
 
 **Result:**
-- Patient users see 403 errors on Dashboard and Alerts pages
-- Frontend doesn't check user role before rendering UI
-- No graceful degradation or role-based UI hiding
+- Patient users see their own dashboard with proper data isolation
+- Clinician users get 403 errors on patient-only endpoints (expected behavior)
+- No security vulnerabilities in patient data access
 
 ## Recommendations
 

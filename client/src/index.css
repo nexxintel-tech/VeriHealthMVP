@@ -91,6 +91,13 @@
   --input: 214 32% 91%;
   --ring: 199 89% 48%;
   
+  /* Replit UI Component Variables */
+  --badge-outline: hsl(214 32% 91%);
+  --button-outline: hsl(214 32% 91%);
+  --primary-border: hsl(199 89% 48%);
+  --secondary-border: hsl(210 40% 96.1%);
+  --destructive-border: hsl(0 84% 60%);
+  
   /* Chart Colors */
   --chart-1: 199 89% 48%; /* Primary Blue */
   --chart-2: 160 84% 39%; /* Success Green */
@@ -150,6 +157,13 @@
   --border: 217 33% 17%;
   --input: 217 33% 17%;
   --ring: 199 89% 48%;
+  
+  /* Replit UI Component Variables */
+  --badge-outline: hsl(217 33% 17%);
+  --button-outline: hsl(217 33% 17%);
+  --primary-border: hsl(199 89% 48%);
+  --secondary-border: hsl(217 33% 17%);
+  --destructive-border: hsl(0 62.8% 30.6%);
   
   --chart-1: 199 89% 48%;
   --chart-2: 160 84% 39%;
