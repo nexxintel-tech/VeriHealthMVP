@@ -19,7 +19,6 @@ export const users = pgTable("users", {
   id: varchar("id").primaryKey(),
   email: text("email").notNull().unique(),
   role: text("role").notNull().default("patient"),
-  passwordHash: text("encrypted_password"),
   institutionId: uuid("institution_id"),
   institutionUuid: varchar("institution_uuid"),
   approvalStatus: text("approval_status"),
@@ -27,7 +26,6 @@ export const users = pgTable("users", {
   emailConfirmed: boolean("email_confirmed").notNull().default(false),
   healthDataConsent: boolean("health_data_consent"),
   femaleHealthConsent: boolean("female_health_consent"),
-  passwordResetToken: text("password_reset_token"),
   passwordResetExpires: timestamp("password_reset_expires"),
   createdAt: timestamp("created_at").defaultNow(),
 });
