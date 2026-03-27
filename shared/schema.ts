@@ -19,7 +19,7 @@ export const users = pgTable("users", {
   id: varchar("id").primaryKey(),
   email: text("email").notNull().unique(),
   role: text("role").notNull().default("patient"),
-  passwordHash: text("password_hash"),
+  passwordHash: text("encrypted_password"),
   institutionId: uuid("institution_id"),
   institutionUuid: varchar("institution_uuid"),
   approvalStatus: text("approval_status"),
