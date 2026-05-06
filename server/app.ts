@@ -49,12 +49,26 @@ function redactForLogs(value: unknown): unknown {
   return value;
 }
 
-app.use(express.json({
+const jsonBodyParser = express.json({
+  limit: "1mb",
+  verify: (req, _res, buf) => {
+    req.rawBody = buf;
+  },
+});
+
+const largeJsonBodyParser = express.json({
   limit: "15mb",
   verify: (req, _res, buf) => {
     req.rawBody = buf;
   },
-}));
+});
+
+app.use((req, res, next) => {
+  const parser = req.path === "/api/patient/files" && req.method === "POST"
+    ? largeJsonBodyParser
+    : jsonBodyParser;
+  parser(req, res, next);
+});
 app.use(express.urlencoded({ extended: false }));
 
 app.use((req, res, next) => {

@@ -24,9 +24,12 @@ export const users = pgTable("users", {
   approvalStatus: text("approval_status"),
   authUserId: varchar("auth_user_id"),
   emailConfirmed: boolean("email_confirmed").notNull().default(false),
+  passwordHash: text("password_hash"),
+  passwordResetTokenHash: text("password_reset_token_hash"),
   healthDataConsent: boolean("health_data_consent"),
   femaleHealthConsent: boolean("female_health_consent"),
   passwordResetExpires: timestamp("password_reset_expires"),
+  disabledAt: timestamp("disabled_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -148,7 +151,8 @@ export const userInvites = pgTable("user_invites", {
   role: text("role").notNull().default("patient"),
   institutionId: uuid("institution_id"),
   invitedById: varchar("invited_by_id"),
-  token: text("token").notNull().unique(),
+  token: text("token"),
+  tokenHash: text("token_hash").notNull().unique(),
   status: text("status").notNull().default("pending"),
   expiresAt: timestamp("expires_at").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
