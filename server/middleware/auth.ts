@@ -4,7 +4,13 @@ import { db } from '../db';
 import { users, userProfiles } from '../../shared/schema';
 import { eq } from 'drizzle-orm';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'verihealth-dev-secret-change-in-production';
+const JWT_SECRET: string = (() => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT_SECRET must be set');
+  }
+  return secret;
+})();
 
 declare global {
   namespace Express {
@@ -15,6 +21,7 @@ declare global {
         role: 'patient' | 'clinician' | 'admin' | 'institution_admin';
         institutionId?: string | null;
         approvalStatus?: string | null;
+        disabledAt?: Date | null;
       };
     }
   }
@@ -58,13 +65,17 @@ export async function authenticateUser(
     }
 
     const [userData] = await db
-      .select({ id: users.id, email: users.email, approvalStatus: users.approvalStatus })
+      .select({ id: users.id, email: users.email, approvalStatus: users.approvalStatus, disabledAt: users.disabledAt })
       .from(users)
       .where(eq(users.id, payload.userId))
       .limit(1);
 
     if (!userData) {
       return res.status(403).json({ error: 'User not found' });
+    }
+
+    if (userData.disabledAt) {
+      return res.status(403).json({ error: 'Account disabled' });
     }
 
     const [profileData] = await db
@@ -83,6 +94,7 @@ export async function authenticateUser(
       role: profileData.role as 'patient' | 'clinician' | 'admin' | 'institution_admin',
       institutionId: profileData.institutionId,
       approvalStatus: userData.approvalStatus,
+      disabledAt: userData.disabledAt,
     };
 
     next();

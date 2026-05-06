@@ -517,11 +517,16 @@ export function AdminPanel() {
                           </TableCell>
                           <TableCell>{user.institutionName || "-"}</TableCell>
                           <TableCell>
-                            {user.approvalStatus && (
-                              <Badge variant={user.approvalStatus === "approved" ? "default" : "secondary"}>
-                                {user.approvalStatus}
+                            <div className="flex flex-wrap gap-1">
+                              <Badge variant={user.isActive ? "default" : "destructive"}>
+                                {user.isActive ? "active" : "disabled"}
                               </Badge>
-                            )}
+                              {user.approvalStatus && (
+                                <Badge variant={user.approvalStatus === "approved" ? "default" : "secondary"}>
+                                  {user.approvalStatus}
+                                </Badge>
+                              )}
+                            </div>
                           </TableCell>
                           <TableCell>{new Date(user.createdAt).toLocaleDateString()}</TableCell>
                           <TableCell className="text-right">
@@ -558,16 +563,16 @@ export function AdminPanel() {
                                 size="icon"
                                 variant="ghost"
                                 onClick={() => {
-                                  if (confirm(`${user.approvalStatus === 'approved' ? 'Disable' : 'Enable'} this user?`)) {
+                                  if (confirm(`${user.isActive ? 'Disable' : 'Enable'} this user?`)) {
                                     toggleStatusMutation.mutate({ 
                                       userId: user.id, 
-                                      isActive: user.approvalStatus !== 'approved' 
+                                      isActive: !user.isActive
                                     });
                                   }
                                 }}
                                 data-testid={`button-toggle-${user.id}`}
                               >
-                                {user.approvalStatus === 'approved' ? 
+                                {user.isActive ? 
                                   <Ban className="h-4 w-4 text-red-500" /> : 
                                   <CheckCircle className="h-4 w-4 text-green-500" />
                                 }

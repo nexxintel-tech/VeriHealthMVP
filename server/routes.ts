@@ -60,6 +60,10 @@ function calcAge(dateOfBirth: string | null | undefined): number {
   return Math.floor((Date.now() - new Date(dateOfBirth).getTime()) / (365.25 * 24 * 60 * 60 * 1000));
 }
 
+function hashToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
 async function logActivity(userId: string, action: string, targetType: string, targetId?: string | null, details?: string, ipAddress?: string) {
   try {
     await db.insert(activityLogs).values({
@@ -130,6 +134,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ error: "Invalid email or password" });
       }
 
+      if (user.disabledAt) {
+        return res.status(403).json({ error: "Account disabled. Please contact support." });
+      }
+
       const valid = await bcrypt.compare(password, user.passwordHash);
       if (!valid) {
         return res.status(401).json({ error: "Invalid email or password" });
@@ -174,8 +182,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let inviteId: string | null = null;
 
       if (inviteToken) {
+        const inviteTokenHash = hashToken(inviteToken);
         const [invite] = await db.select().from(userInvites)
-          .where(and(eq(userInvites.token, inviteToken), eq(userInvites.status, "pending")))
+          .where(and(eq(userInvites.tokenHash, inviteTokenHash), eq(userInvites.status, "pending")))
           .limit(1);
 
         if (!invite) {
@@ -261,8 +270,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Token is required" });
       }
 
+      const inviteTokenHash = hashToken(token);
       const [invite] = await db.select().from(userInvites)
-        .where(and(eq(userInvites.token, token), eq(userInvites.status, "pending")))
+        .where(and(eq(userInvites.tokenHash, inviteTokenHash), eq(userInvites.status, "pending")))
         .limit(1);
 
       if (!invite) {
@@ -352,10 +362,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const resetToken = crypto.randomBytes(32).toString("hex");
+      const resetTokenHash = hashToken(resetToken);
       const resetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
       await db.update(users).set({
-        passwordResetToken: resetToken,
+        passwordResetTokenHash: resetTokenHash,
         passwordResetExpires: resetExpires,
       }).where(eq(users.id, user.id));
 
@@ -380,8 +391,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!password) return res.status(400).json({ error: "Password is required" });
       if (!token) return res.status(400).json({ error: "Reset token is required" });
 
+      const resetTokenHash = hashToken(token);
       const [user] = await db.select().from(users)
-        .where(eq(users.passwordResetToken, token))
+        .where(eq(users.passwordResetTokenHash, resetTokenHash))
         .limit(1);
 
       if (!user || !user.passwordResetExpires || new Date(user.passwordResetExpires) < new Date()) {
@@ -391,7 +403,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const passwordHash = await bcrypt.hash(password, 12);
       await db.update(users).set({
         passwordHash,
-        passwordResetToken: null,
+        passwordResetTokenHash: null,
         passwordResetExpires: null,
       }).where(eq(users.id, user.id));
 
@@ -1152,7 +1164,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/admin/users", authenticateUser, requireRole("admin"), async (req, res) => {
     try {
-      const userList = await db.select({ id: users.id, email: users.email, approvalStatus: users.approvalStatus, createdAt: users.createdAt })
+      const userList = await db.select({ id: users.id, email: users.email, approvalStatus: users.approvalStatus, disabledAt: users.disabledAt, createdAt: users.createdAt })
         .from(users).orderBy(desc(users.createdAt));
 
       const allProfiles = await db.select().from(userProfiles);
@@ -1174,6 +1186,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           institutionId: up?.institutionId || null,
           institutionName: up?.institutionId ? institutionMap[up.institutionId] : null,
           approvalStatus: user.approvalStatus,
+          isActive: !user.disabledAt,
+          disabledAt: user.disabledAt,
           createdAt: user.createdAt,
         };
       });
@@ -1187,7 +1201,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/admin/users/export", authenticateUser, requireRole("admin"), async (req, res) => {
     try {
-      const userList = await db.select({ id: users.id, email: users.email, approvalStatus: users.approvalStatus, createdAt: users.createdAt })
+      const userList = await db.select({ id: users.id, email: users.email, approvalStatus: users.approvalStatus, disabledAt: users.disabledAt, createdAt: users.createdAt })
         .from(users).orderBy(desc(users.createdAt));
 
       const allProfiles = await db.select().from(userProfiles);
@@ -1200,14 +1214,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const profileMap = allClinicianProfiles.reduce((acc, p) => { acc[p.userId] = p.fullName; return acc; }, {} as Record<string, string>);
 
       const csvRows = [
-        ["ID", "Email", "Name", "Role", "Institution", "Status", "Created At"].join(","),
+        ["ID", "Email", "Name", "Role", "Institution", "Status", "Active", "Created At"].join(","),
         ...userList.map((u) => {
           const up = exportProfileMap[u.id];
           return [
             u.id, u.email, profileMap[u.id] || u.email.split("@")[0],
             up?.role || "patient",
             up?.institutionId ? institutionMap[up.institutionId] : "",
-            u.approvalStatus || "", u.createdAt,
+            u.approvalStatus || "", u.disabledAt ? "false" : "true", u.createdAt,
           ].map((v) => `"${String(v || "").replace(/"/g, '""')}"`).join(",");
         }),
       ];
@@ -1225,7 +1239,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { id } = req.params;
 
-      const [user] = await db.select({ id: users.id, email: users.email, approvalStatus: users.approvalStatus, createdAt: users.createdAt })
+      const [user] = await db.select({ id: users.id, email: users.email, approvalStatus: users.approvalStatus, disabledAt: users.disabledAt, createdAt: users.createdAt })
         .from(users).where(eq(users.id, id)).limit(1);
 
       if (!user) return res.status(404).json({ error: "User not found" });
@@ -1250,7 +1264,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         patientCount = Number(value);
       }
 
-      res.json({ ...user, role, institution_id: institutionId, profile, institution, patientCount });
+      res.json({ ...user, role, institution_id: institutionId, profile, institution, patientCount, isActive: !user.disabledAt });
     } catch (error) {
       console.error("Error fetching user details:", error);
       res.status(500).json({ error: "Failed to fetch user details" });
@@ -1319,9 +1333,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const adminId = req.user!.id;
 
       if (id === adminId) return res.status(400).json({ error: "Cannot disable your own account" });
+      if (typeof isActive !== "boolean") return res.status(400).json({ error: "isActive must be a boolean" });
+
+      const [updated] = await db.update(users).set({ disabledAt: isActive ? null : new Date() }).where(eq(users.id, id)).returning({ id: users.id });
+      if (!updated) return res.status(404).json({ error: "User not found" });
 
       await logActivity(req.user!.id, isActive ? "enable" : "disable", "user", id, `${isActive ? "Enabled" : "Disabled"} user account`, req.ip);
-
       res.json({ message: `User ${isActive ? "enabled" : "disabled"} successfully` });
     } catch (error) {
       console.error("Error updating user status:", error);
@@ -1340,7 +1357,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const filteredIds = userIds.filter((id) => id !== adminId);
 
-      if (action === "change_role" && role) {
+      if (action === "disable" || action === "enable") {
+        await db.update(users).set({ disabledAt: action === "enable" ? null : new Date() }).where(inArray(users.id, filteredIds));
+      } else if (action === "change_role" && role) {
         const profileUpdate: any = { role };
         const userUpdate: any = {};
         if (role === "institution_admin" || role === "clinician") {
@@ -1505,6 +1524,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (existingUser) return res.status(400).json({ error: "User with this email already exists" });
 
       const token = crypto.randomBytes(32).toString("hex");
+      const tokenHash = hashToken(token);
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 7);
 
@@ -1514,7 +1534,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         role: role || "patient",
         institutionId: institutionId || null,
         invitedById: req.user!.id,
-        token,
+        token: null,
+        tokenHash,
         status: "pending",
         expiresAt,
       }).returning();
@@ -1531,7 +1552,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       await logActivity(req.user!.id, "invite_sent", "invite", data.id, `Sent invite to ${email} as ${role || "patient"}`, req.ip);
-      res.json(data);
+      res.json({
+        id: data.id,
+        email: data.email,
+        role: data.role,
+        institutionId: data.institutionId,
+        invitedById: data.invitedById,
+        status: data.status,
+        expiresAt: data.expiresAt,
+        createdAt: data.createdAt,
+      });
     } catch (error) {
       console.error("Error creating invite:", error);
       res.status(500).json({ error: "Failed to create invite" });
@@ -1540,7 +1570,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/admin/invites", authenticateUser, requireRole("admin"), async (req, res) => {
     try {
-      const inviteList = await db.select().from(userInvites).orderBy(desc(userInvites.createdAt));
+      const inviteList = await db.select({
+        id: userInvites.id,
+        email: userInvites.email,
+        role: userInvites.role,
+        institutionId: userInvites.institutionId,
+        invitedById: userInvites.invitedById,
+        status: userInvites.status,
+        expiresAt: userInvites.expiresAt,
+        createdAt: userInvites.createdAt,
+      }).from(userInvites).orderBy(desc(userInvites.createdAt));
       res.json(inviteList);
     } catch (error) {
       console.error("Error fetching invites:", error);

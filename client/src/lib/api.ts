@@ -550,6 +550,8 @@ export interface AdminUser {
   institutionId: string | null;
   institutionName: string | null;
   approvalStatus: string | null;
+  isActive: boolean;
+  disabledAt: string | null;
   createdAt: string;
 }
 

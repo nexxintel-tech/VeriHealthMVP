@@ -3,6 +3,7 @@ import pg from "pg";
 import * as schema from "@shared/schema";
 
 const { Pool } = pg;
+const rejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== "false";
 
 if (!process.env.DATABASE_URL) {
   throw new Error(
@@ -17,7 +18,7 @@ export const pool = new Pool({
   idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
   connectionTimeoutMillis: 5000, // Don't hang forever if the DB is unreachable
   ssl: {
-    rejectUnauthorized: false // Required for most cloud providers to connect via SSL
+    rejectUnauthorized
   }
 });
 

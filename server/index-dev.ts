@@ -12,12 +12,15 @@ import runApp from "./app";
 import viteConfig from "../vite.config";
 
 const viteLogger = createLogger();
+const allowedHosts = process.env.VITE_ALLOWED_HOSTS
+  ? process.env.VITE_ALLOWED_HOSTS.split(",").map((host) => host.trim()).filter(Boolean)
+  : ["localhost", "127.0.0.1", ".replit.dev", ".replit.app"];
 
 export async function setupVite(app: Express, server: Server) {
   const serverOptions = {
     middlewareMode: true,
     hmr: { server },
-    allowedHosts: true as const,
+    allowedHosts,
   };
 
   const vite = await createViteServer({
