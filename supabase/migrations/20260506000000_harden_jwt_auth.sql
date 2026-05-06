@@ -8,6 +8,19 @@ ALTER TABLE public.users
   ADD COLUMN IF NOT EXISTS password_reset_token_hash text,
   ADD COLUMN IF NOT EXISTS disabled_at timestamptz;
 
+CREATE TABLE IF NOT EXISTS public.user_invites (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  email text NOT NULL,
+  role text NOT NULL DEFAULT 'patient',
+  institution_id uuid,
+  invited_by_id varchar,
+  token text,
+  token_hash text,
+  status text NOT NULL DEFAULT 'pending',
+  expires_at timestamptz NOT NULL,
+  created_at timestamptz DEFAULT now()
+);
+
 ALTER TABLE public.user_invites
   ADD COLUMN IF NOT EXISTS token_hash text;
 
