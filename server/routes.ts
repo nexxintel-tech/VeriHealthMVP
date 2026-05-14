@@ -415,7 +415,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/auth/resend-confirmation", authRateLimit, async (req, res) => {
-    res.json({ message: "If an account exists with this email, a confirmation link has been sent." });
+    res.status(410).json({
+      error: "Email confirmation is not enabled for this deployment.",
+    });
   });
 
   app.get("/api/auth/me", authenticateUser, async (req, res) => {

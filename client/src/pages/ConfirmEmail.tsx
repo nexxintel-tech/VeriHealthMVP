@@ -1,54 +1,24 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
-import { CheckCircle2, XCircle, Loader2, Activity } from "lucide-react";
+import { XCircle, Loader2, Activity } from "lucide-react";
 import AuthLayout from "@/components/auth/AuthLayout";
 
 export default function ConfirmEmail() {
   const [, setLocation] = useLocation();
-  const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
+  const [status, setStatus] = useState<"loading" | "error">("loading");
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    const confirmEmail = async () => {
-      try {
-        const searchParams = new URLSearchParams(window.location.search);
-        const queryToken = searchParams.get("token");
+    const timeout = window.setTimeout(() => {
+      setStatus("error");
+      setMessage(
+        "Email confirmation is not active on this deployment. Go to login and sign in with the account you created.",
+      );
+    }, 300);
 
-        const hashParams = new URLSearchParams(window.location.hash.substring(1));
-        const hashToken = hashParams.get("access_token");
-
-        const token = queryToken || hashToken;
-
-        if (!token) {
-          setStatus("error");
-          setMessage("Invalid confirmation link. Please try requesting a new one.");
-          return;
-        }
-
-        const response = await fetch(`/api/auth/confirm-email?token=${encodeURIComponent(token)}`, {
-          method: "GET",
-          headers: { "Content-Type": "application/json" },
-        });
-
-        if (!response.ok) {
-          const data = await response.json().catch(() => ({}));
-          throw new Error(data.error || "Confirmation failed");
-        }
-
-        setStatus("success");
-        setMessage("Your email has been confirmed. Redirecting to login…");
-
-        setTimeout(() => setLocation("/login"), 2500);
-      } catch (error: any) {
-        console.error("Email confirmation error:", error);
-        setStatus("error");
-        setMessage(error.message || "Failed to confirm email. Please try again or contact support.");
-      }
-    };
-
-    confirmEmail();
-  }, [setLocation]);
+    return () => window.clearTimeout(timeout);
+  }, []);
 
   return (
     <AuthLayout
@@ -69,11 +39,6 @@ export default function ConfirmEmail() {
               <Loader2 className="h-9 w-9 text-teal-500 animate-spin" />
             </div>
           )}
-          {status === "success" && (
-            <div className="h-20 w-20 rounded-full bg-green-50 flex items-center justify-center">
-              <CheckCircle2 className="h-9 w-9 text-green-600" />
-            </div>
-          )}
           {status === "error" && (
             <div className="h-20 w-20 rounded-full bg-red-50 flex items-center justify-center">
               <XCircle className="h-9 w-9 text-red-500" />
@@ -82,21 +47,11 @@ export default function ConfirmEmail() {
 
           <div className="text-center space-y-2">
             <h1 className="text-2xl font-heading font-bold tracking-tight text-foreground">
-              {status === "loading" && "Confirming your email…"}
-              {status === "success" && "Email Confirmed!"}
-              {status === "error" && "Confirmation Failed"}
+              {status === "loading" && "Checking your link..."}
+              {status === "error" && "Email Confirmation Unavailable"}
             </h1>
             <p className="text-sm text-muted-foreground max-w-xs">{message}</p>
           </div>
-
-          {status === "success" && (
-            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-teal-400 to-indigo-600 rounded-full"
-                style={{ animation: "progress 2.5s linear forwards" }}
-              />
-            </div>
-          )}
         </div>
 
         {status === "error" && (
@@ -114,24 +69,11 @@ export default function ConfirmEmail() {
               className="w-full h-12 rounded-xl"
               data-testid="button-goto-register"
             >
-              Create New Account
+              Create Another Account
             </Button>
           </div>
         )}
-
-        {status === "loading" && (
-          <p className="text-center text-xs text-muted-foreground/70">
-            This usually takes just a moment…
-          </p>
-        )}
       </div>
-
-      <style>{`
-        @keyframes progress {
-          from { width: 0%; }
-          to { width: 100%; }
-        }
-      `}</style>
     </AuthLayout>
   );
 }

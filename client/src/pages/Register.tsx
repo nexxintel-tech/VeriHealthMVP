@@ -106,11 +106,14 @@ export default function Register() {
         if (userResponse.ok) {
           const userData = await userResponse.json();
           setUser(userData.user);
+          toast({ title: "Registration successful", description: "Welcome to VeriHealth!" });
+          setLocation(userData.user.role === "patient" ? "/patient" : "/");
+          return;
         }
       }
 
       toast({ title: "Registration successful", description: "Welcome to VeriHealth!" });
-      setLocation("/");
+      setLocation("/login");
     } catch (error: any) {
       toast({
         title: "Registration failed",

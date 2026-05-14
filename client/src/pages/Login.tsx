@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Activity, Loader2, Mail, Eye, EyeOff, Clock } from "lucide-react";
+import { Activity, Loader2, Eye, EyeOff, Clock } from "lucide-react";
 import { login } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import AuthLayout from "@/components/auth/AuthLayout";
@@ -12,18 +12,14 @@ export default function Login() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
-  const [isResendingConfirmation, setIsResendingConfirmation] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [showResendConfirmation, setShowResendConfirmation] = useState(false);
-  const [unconfirmedEmail, setUnconfirmedEmail] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [clinicianPending, setClinicianPending] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    setShowResendConfirmation(false);
     setClinicianPending(false);
 
     try {
@@ -51,16 +47,6 @@ export default function Login() {
           variant: "destructive",
           duration: 8000,
         });
-      } else if (errorData.requiresConfirmation) {
-        setShowResendConfirmation(true);
-        setUnconfirmedEmail(errorData.email || email);
-        toast({
-          title: "Email not confirmed",
-          description:
-            "Please check your inbox and confirm your email before logging in.",
-          variant: "destructive",
-          duration: 8000,
-        });
       } else {
         toast({
           title: "Sign in failed",
@@ -73,32 +59,6 @@ export default function Login() {
     }
   };
 
-  const handleResendConfirmation = async () => {
-    setIsResendingConfirmation(true);
-    try {
-      const response = await fetch("/api/auth/resend-confirmation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: unconfirmedEmail }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Failed to resend");
-      toast({
-        title: "Email sent",
-        description: "Please check your inbox for the confirmation link.",
-        duration: 5000,
-      });
-      setShowResendConfirmation(false);
-    } catch (error: any) {
-      toast({
-        title: "Failed to send email",
-        description: error.message || "Please try again later",
-        variant: "destructive",
-      });
-    } finally {
-      setIsResendingConfirmation(false);
-    }
-  };
 
   return (
     <AuthLayout
@@ -205,34 +165,6 @@ export default function Login() {
                 </p>
               </div>
             </div>
-          </div>
-        )}
-
-        {showResendConfirmation && (
-          <div className="bg-amber-50 p-4 rounded-xl border border-amber-200">
-            <p className="text-sm text-amber-900 mb-3 font-medium">
-              Didn't receive the confirmation email?
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleResendConfirmation}
-              disabled={isResendingConfirmation}
-              className="w-full h-10 rounded-xl"
-              data-testid="button-resend-confirmation"
-            >
-              {isResendingConfirmation ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Sending…
-                </>
-              ) : (
-                <>
-                  <Mail className="mr-2 h-4 w-4" />
-                  Resend Confirmation Email
-                </>
-              )}
-            </Button>
           </div>
         )}
 
