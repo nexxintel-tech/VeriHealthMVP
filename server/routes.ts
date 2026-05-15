@@ -64,23 +64,6 @@ function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
-function normalizeAppUrl(url: string | undefined, fallback: string): string {
-  const value = (url || fallback).trim();
-  return value.replace(/\/+$/, "");
-}
-
-function getDashboardAppUrl(): string {
-  return normalizeAppUrl(process.env.VITE_DASHBOARD_URL, "http://localhost:5000");
-}
-
-function getPatientAppUrl(): string {
-  return normalizeAppUrl(process.env.VITE_PATIENT_APP_URL, getDashboardAppUrl());
-}
-
-function getAuthAppUrlForRole(role: string | null | undefined): string {
-  return role === "patient" ? getPatientAppUrl() : getDashboardAppUrl();
-}
-
 async function logActivity(userId: string, action: string, targetType: string, targetId?: string | null, details?: string, ipAddress?: string) {
   try {
     await db.insert(activityLogs).values({
@@ -378,12 +361,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ message: "If an account exists with this email, a password reset link has been sent." });
       }
 
-      const [profile] = await db
-        .select({ role: userProfiles.role })
-        .from(userProfiles)
-        .where(eq(userProfiles.userId, user.id))
-        .limit(1);
-
       const resetToken = crypto.randomBytes(32).toString("hex");
       const resetTokenHash = hashToken(resetToken);
       const resetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
@@ -393,8 +370,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         passwordResetExpires: resetExpires,
       }).where(eq(users.id, user.id));
 
-      const resetBaseUrl = getAuthAppUrlForRole(profile?.role);
-      const resetUrl = `${resetBaseUrl}/reset-password?token=${resetToken}`;
+      const resetUrl = `${process.env.VITE_DASHBOARD_URL || "http://localhost:5000"}/reset-password?token=${resetToken}`;
       try {
         const resetEmail = generatePasswordResetEmail(email, resetUrl);
         await sendEmail(resetEmail);
@@ -1566,8 +1542,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         expiresAt,
       }).returning();
 
-      const inviteBaseUrl = getAuthAppUrlForRole(role || "patient");
-      const inviteUrl = `${inviteBaseUrl}/register?invite=${token}`;
+      const inviteUrl = `${process.env.VITE_DASHBOARD_URL || "http://localhost:5000"}/register?invite=${token}`;
       try {
         await sendEmail({
           to: email,

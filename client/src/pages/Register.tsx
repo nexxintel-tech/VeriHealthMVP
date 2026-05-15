@@ -7,7 +7,6 @@ import { Activity, Loader2, UserPlus, Eye, EyeOff, Mail } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { setAuthToken, setUser } from "@/lib/auth";
 import AuthLayout from "@/components/auth/AuthLayout";
-import { isPatientAppHost, navigateToRoleHome } from "@/lib/runtime";
 
 function getPasswordStrength(pw: string): { level: 0 | 1 | 2 | 3; label: string; color: string } {
   if (!pw) return { level: 0, label: "", color: "" };
@@ -108,7 +107,7 @@ export default function Register() {
           const userData = await userResponse.json();
           setUser(userData.user);
           toast({ title: "Registration successful", description: "Welcome to VeriHealth!" });
-          navigateToRoleHome(userData.user.role, setLocation);
+          setLocation(userData.user.role === "patient" ? "/patient" : "/");
           return;
         }
       }
@@ -148,9 +147,7 @@ export default function Register() {
             Create an account
           </h1>
           <p className="text-muted-foreground text-sm">
-            {isPatientAppHost()
-              ? "Create your patient account to access your health app."
-              : "Enter your details to get started with VeriHealth."}
+            Enter your details to get started with VeriHealth.
           </p>
         </div>
 
@@ -159,7 +156,7 @@ export default function Register() {
             <Label htmlFor="email" className="text-sm font-medium">Email</Label>
             <Input
               id="email"
-              placeholder={isPatientAppHost() ? "patient@example.com" : "doctor@hospital.org"}
+              placeholder="doctor@hospital.org"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -304,18 +301,16 @@ export default function Register() {
               Sign in
             </a>
           </p>
-          {!isPatientAppHost() && (
-            <p className="text-sm text-muted-foreground">
-              Healthcare provider?{" "}
-              <a
-                href="/register-clinician"
-                className="font-medium text-teal-600 hover:text-indigo-600 hover:underline underline-offset-4 transition-colors"
-                data-testid="link-register-clinician"
-              >
-                Register as Clinician
-              </a>
-            </p>
-          )}
+          <p className="text-sm text-muted-foreground">
+            Healthcare provider?{" "}
+            <a
+              href="/register-clinician"
+              className="font-medium text-teal-600 hover:text-indigo-600 hover:underline underline-offset-4 transition-colors"
+              data-testid="link-register-clinician"
+            >
+              Register as Clinician
+            </a>
+          </p>
         </div>
 
         <p className="text-center text-xs text-muted-foreground/70">
