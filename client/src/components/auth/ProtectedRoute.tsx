@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { isAuthenticated, getUser, getAuthToken, clearAuth } from "@/lib/auth";
+import { isPatientAppHost, navigateToRoleHome } from "@/lib/runtime";
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -35,17 +36,18 @@ export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) 
         .then(data => {
           if (!data) return;
 
+          if (isPatientAppHost() && data.role !== "patient") {
+            navigateToRoleHome(data.role, setLocation);
+            return;
+          }
+
           if (data.role === 'patient' && (!allowedRoles || !allowedRoles.includes('patient'))) {
-            setLocation("/patient");
+            navigateToRoleHome("patient", setLocation);
             return;
           }
 
           if (allowedRoles && !allowedRoles.includes(data.role)) {
-            if (data.role === 'patient') {
-              setLocation("/patient");
-            } else {
-              setLocation("/");
-            }
+            navigateToRoleHome(data.role, setLocation);
             return;
           }
 

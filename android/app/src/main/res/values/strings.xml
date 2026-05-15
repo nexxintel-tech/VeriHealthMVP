@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">VeriHealth</string>
+    <string name="title_activity_main">VeriHealth</string>
+    <string name="package_name">com.fulscann.verihealthapp</string>
+    <string name="custom_url_scheme">com.fulscann.verihealthapp</string>
+</resources>

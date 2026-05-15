@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearch } from "wouter";
 import { format } from "date-fns";
 import {
   HeartPulse,
@@ -326,7 +327,13 @@ function DependentDashboardView({ dependentPatientId }: { dependentPatientId: st
 }
 
 export default function PatientHome() {
+  const search = useSearch();
   const [selectedDependentId, setSelectedDependentId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    setSelectedDependentId(params.get("dependent"));
+  }, [search]);
 
   return (
     <PatientLayout

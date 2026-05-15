@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Activity, Loader2, Mail, ArrowLeft, CheckCircle2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import AuthLayout from "@/components/auth/AuthLayout";
+import { isPatientAppHost } from "@/lib/runtime";
 
 export default function ForgotPassword() {
   const { toast } = useToast();
@@ -113,7 +114,7 @@ export default function ForgotPassword() {
                 <Label htmlFor="email" className="text-sm font-medium">Email address</Label>
                 <Input
                   id="email"
-                  placeholder="doctor@hospital.org"
+                  placeholder={isPatientAppHost() ? "patient@example.com" : "doctor@hospital.org"}
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}

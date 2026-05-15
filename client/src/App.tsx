@@ -26,54 +26,32 @@ import PatientAlerts from "@/pages/patient/PatientAlerts";
 import PatientProfile from "@/pages/patient/PatientProfile";
 import PatientFiles from "@/pages/patient/PatientFiles";
 import PatientDependents from "@/pages/patient/PatientDependents";
+import { isPatientAppHost } from "@/lib/runtime";
 
 function Router() {
   // Enable realtime updates
   useRealtimeSubscriptions();
+  const patientHost = isPatientAppHost();
 
   return (
     <Switch>
       <Route path="/login" component={Login} />
       <Route path="/register" component={Register} />
-      <Route path="/register-clinician" component={ClinicianRegister} />
       <Route path="/forgot-password" component={ForgotPassword} />
       <Route path="/reset-password" component={ResetPassword} />
       <Route path="/confirm-email" component={ConfirmEmail} />
       <Route path="/auth/callback" component={AuthCallback} />
+      {!patientHost && <Route path="/register-clinician" component={ClinicianRegister} />}
       <Route path="/">
-        <ProtectedRoute>
-          <Dashboard />
-        </ProtectedRoute>
-      </Route>
-      <Route path="/patients">
-        <ProtectedRoute>
-          <PatientList />
-        </ProtectedRoute>
-      </Route>
-      <Route path="/patients/:id">
-        <ProtectedRoute>
-          <PatientDetail />
-        </ProtectedRoute>
-      </Route>
-      <Route path="/alerts">
-        <ProtectedRoute>
-          <Alerts />
-        </ProtectedRoute>
-      </Route>
-      <Route path="/admin/clinician-approvals">
-        <ProtectedRoute allowedRoles={['admin', 'institution_admin']}>
-          <ClinicianApprovals />
-        </ProtectedRoute>
-      </Route>
-      <Route path="/admin/users">
-        <ProtectedRoute allowedRoles={['admin']}>
-          <AdminPanel />
-        </ProtectedRoute>
-      </Route>
-      <Route path="/admin">
-        <ProtectedRoute allowedRoles={['admin']}>
-          <AdminPanel />
-        </ProtectedRoute>
+        {patientHost ? (
+          <ProtectedRoute allowedRoles={['patient']}>
+            <PatientHome />
+          </ProtectedRoute>
+        ) : (
+          <ProtectedRoute>
+            <Dashboard />
+          </ProtectedRoute>
+        )}
       </Route>
       <Route path="/patient">
         <ProtectedRoute allowedRoles={['patient']}>
@@ -105,11 +83,45 @@ function Router() {
           <PatientProfile />
         </ProtectedRoute>
       </Route>
-      <Route path="/settings">
-        <ProtectedRoute>
-          <Settings />
-        </ProtectedRoute>
-      </Route>
+      {!patientHost && (
+        <>
+          <Route path="/patients">
+            <ProtectedRoute>
+              <PatientList />
+            </ProtectedRoute>
+          </Route>
+          <Route path="/patients/:id">
+            <ProtectedRoute>
+              <PatientDetail />
+            </ProtectedRoute>
+          </Route>
+          <Route path="/alerts">
+            <ProtectedRoute>
+              <Alerts />
+            </ProtectedRoute>
+          </Route>
+          <Route path="/admin/clinician-approvals">
+            <ProtectedRoute allowedRoles={['admin', 'institution_admin']}>
+              <ClinicianApprovals />
+            </ProtectedRoute>
+          </Route>
+          <Route path="/admin/users">
+            <ProtectedRoute allowedRoles={['admin']}>
+              <AdminPanel />
+            </ProtectedRoute>
+          </Route>
+          <Route path="/admin">
+            <ProtectedRoute allowedRoles={['admin']}>
+              <AdminPanel />
+            </ProtectedRoute>
+          </Route>
+          <Route path="/settings">
+            <ProtectedRoute>
+              <Settings />
+            </ProtectedRoute>
+          </Route>
+        </>
+      )}
       <Route component={NotFound} />
     </Switch>
   );

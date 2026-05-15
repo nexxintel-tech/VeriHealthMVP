@@ -28,6 +28,7 @@ import { logout, getUser } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
 import { fetchDependents, DependentInfo } from "@/lib/api";
+import { getDependentRoute } from "@/lib/runtime";
 
 interface PatientLayoutProps {
   children: React.ReactNode;
@@ -64,6 +65,11 @@ export default function PatientLayout({
   const selectedDependent = approvedDependents.find(
     (d) => d.dependentPatientId === selectedDependentId
   );
+
+  const handleDependentSelect = (patientId: string | null) => {
+    onDependentSelect?.(patientId);
+    setLocation(getDependentRoute(patientId));
+  };
 
   const handleSignOut = async () => {
     await logout();
@@ -107,7 +113,7 @@ export default function PatientLayout({
             <DropdownMenuLabel className="text-xs">Switch View</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              onClick={() => onDependentSelect?.(null)}
+              onClick={() => handleDependentSelect(null)}
               className={cn(!selectedDependentId && "bg-accent")}
               data-testid="select-dependent-self"
             >
@@ -116,7 +122,7 @@ export default function PatientLayout({
             {approvedDependents.map((dep) => (
               <DropdownMenuItem
                 key={dep.id}
-                onClick={() => onDependentSelect?.(dep.dependentPatientId)}
+                onClick={() => handleDependentSelect(dep.dependentPatientId)}
                 className={cn(
                   selectedDependentId === dep.dependentPatientId && "bg-accent"
                 )}
@@ -130,6 +136,11 @@ export default function PatientLayout({
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
+        {!onDependentSelect && (
+          <p className="mt-2 px-1 text-[11px] text-sidebar-foreground/60">
+            Dependent view opens on the dashboard.
+          </p>
+        )}
       </div>
     );
   };
