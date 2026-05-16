@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -7,6 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import AuthLayout from "@/components/auth/AuthLayout";
 
 export default function ForgotPassword() {
+  const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
   const [email, setEmail] = useState("");
@@ -92,7 +94,7 @@ export default function ForgotPassword() {
 
             <Button
               className="w-full h-12 text-base font-semibold bg-gradient-to-r from-teal-400 to-indigo-600 text-white hover:from-teal-500 hover:to-indigo-700 shadow-md hover:shadow-lg transition-all duration-200 rounded-xl"
-              onClick={() => (window.location.href = "/login")}
+              onClick={() => setLocation("/login")}
               data-testid="button-back-to-login"
             >
               Back to Login
@@ -145,14 +147,14 @@ export default function ForgotPassword() {
             </form>
 
             <p className="text-center text-sm text-muted-foreground">
-              <a
+              <Link
                 href="/login"
                 className="inline-flex items-center gap-1.5 font-medium text-teal-600 hover:text-indigo-600 hover:underline underline-offset-4 transition-colors"
                 data-testid="link-back-to-login"
               >
                 <ArrowLeft className="h-3.5 w-3.5" />
                 Back to login
-              </a>
+              </Link>
             </p>
           </>
         )}

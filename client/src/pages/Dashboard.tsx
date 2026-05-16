@@ -15,7 +15,6 @@ import { StatCard } from "@/components/dashboard/StatCard";
 import { RiskBadge } from "@/components/dashboard/RiskBadge";
 import { TopPerformingClinicians } from "@/components/dashboard/TopPerformingClinicians";
 import { UnassignedPatients } from "@/components/dashboard/UnassignedPatients";
-import { PatientDashboard } from "@/components/dashboard/PatientDashboard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fetchPatients, fetchAlerts, fetchDashboardStats } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -25,7 +24,6 @@ import { getUser } from "@/lib/auth";
 
 export default function Dashboard() {
   const user = getUser();
-  const isPatient = user?.role === 'patient';
   const isClinicianOrAdmin = user?.role === 'clinician' || user?.role === 'admin';
   const isInstitutionAdmin = user?.role === 'institution_admin';
   const canViewPatients = isClinicianOrAdmin; // Institution admins cannot view patients
@@ -52,22 +50,6 @@ export default function Dashboard() {
 
   const highRiskPatients = patients.filter(p => p.riskLevel === "high" || p.riskLevel === "medium");
   const recentAlerts = alerts.slice(0, 4);
-
-  if (isPatient) {
-    return (
-      <Layout>
-        <div className="space-y-8">
-          <div className="flex flex-col gap-2">
-            <h1 className="text-3xl font-heading font-bold tracking-tight text-foreground">My Health Dashboard</h1>
-            <p className="text-muted-foreground">
-              Track your health vitals and stay connected with your care team.
-            </p>
-          </div>
-          <PatientDashboard />
-        </div>
-      </Layout>
-    );
-  }
 
   return (
     <Layout>

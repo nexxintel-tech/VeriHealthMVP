@@ -18,10 +18,20 @@ interface AuthSession {
 
 const TOKEN_KEY = 'verihealth_auth_token';
 const USER_KEY = 'verihealth_user';
+const SESSION_VALIDATION_TTL_MS = 30_000;
+
+interface SessionValidationCache {
+  token: string;
+  role: AuthUser["role"];
+  checkedAt: number;
+}
+
+let sessionValidationCache: SessionValidationCache | null = null;
 
 // Store auth token in localStorage
 export function setAuthToken(token: string): void {
   localStorage.setItem(TOKEN_KEY, token);
+  sessionValidationCache = null;
 }
 
 // Get auth token from localStorage
@@ -49,6 +59,23 @@ export function getUser(): AuthUser | null {
 export function clearAuth(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  sessionValidationCache = null;
+}
+
+export function getRecentSessionValidation(token: string): AuthUser["role"] | null {
+  if (!sessionValidationCache) return null;
+  if (sessionValidationCache.token !== token) return null;
+
+  const isFresh = Date.now() - sessionValidationCache.checkedAt < SESSION_VALIDATION_TTL_MS;
+  return isFresh ? sessionValidationCache.role : null;
+}
+
+export function setRecentSessionValidation(token: string, role: AuthUser["role"]): void {
+  sessionValidationCache = {
+    token,
+    role,
+    checkedAt: Date.now(),
+  };
 }
 
 // Login user

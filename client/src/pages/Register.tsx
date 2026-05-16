@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useLocation, useSearch } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -88,16 +88,6 @@ export default function Register() {
 
       const data = await response.json();
 
-      if (!data.session) {
-        toast({
-          title: "Registration successful!",
-          description: "Please check your email to confirm your account before logging in.",
-          duration: 8000,
-        });
-        setTimeout(() => setLocation("/login"), 2000);
-        return;
-      }
-
       if (data.session?.access_token) {
         setAuthToken(data.session.access_token);
         const userResponse = await fetch("/api/auth/me", {
@@ -112,7 +102,10 @@ export default function Register() {
         }
       }
 
-      toast({ title: "Registration successful", description: "Welcome to VeriHealth!" });
+      toast({
+        title: "Registration successful",
+        description: "Your account is ready. Sign in to continue.",
+      });
       setLocation("/login");
     } catch (error: any) {
       toast({
@@ -293,35 +286,35 @@ export default function Register() {
         <div className="space-y-2 text-center">
           <p className="text-sm text-muted-foreground">
             Already have an account?{" "}
-            <a
+            <Link
               href="/login"
               className="font-medium text-teal-600 hover:text-indigo-600 hover:underline underline-offset-4 transition-colors"
               data-testid="link-login"
             >
               Sign in
-            </a>
+            </Link>
           </p>
           <p className="text-sm text-muted-foreground">
             Healthcare provider?{" "}
-            <a
+            <Link
               href="/register-clinician"
               className="font-medium text-teal-600 hover:text-indigo-600 hover:underline underline-offset-4 transition-colors"
               data-testid="link-register-clinician"
             >
               Register as Clinician
-            </a>
+            </Link>
           </p>
         </div>
 
         <p className="text-center text-xs text-muted-foreground/70">
           By creating an account, you agree to our{" "}
-          <a href="#" className="underline underline-offset-4 hover:text-primary">
+          <Link href="/terms" className="underline underline-offset-4 hover:text-primary">
             Terms of Service
-          </a>{" "}
+          </Link>{" "}
           and{" "}
-          <a href="#" className="underline underline-offset-4 hover:text-primary">
+          <Link href="/privacy" className="underline underline-offset-4 hover:text-primary">
             Privacy Policy
-          </a>
+          </Link>
           .
         </p>
       </div>

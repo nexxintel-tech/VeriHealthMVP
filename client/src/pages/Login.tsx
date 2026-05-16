@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -100,13 +100,13 @@ export default function Login() {
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <Label htmlFor="password" className="text-sm font-medium">Password</Label>
-              <a
+              <Link
                 href="/forgot-password"
                 className="text-xs text-teal-600 hover:text-indigo-600 hover:underline transition-colors"
                 data-testid="link-forgot-password"
               >
                 Forgot password?
-              </a>
+              </Link>
             </div>
             <div className="relative">
               <Input
@@ -171,35 +171,35 @@ export default function Login() {
         <div className="space-y-2 text-center">
           <p className="text-sm text-muted-foreground">
             Don't have an account?{" "}
-            <a
+            <Link
               href="/register"
               className="font-medium text-teal-600 hover:text-indigo-600 hover:underline underline-offset-4 transition-colors"
               data-testid="link-register"
             >
               Create account
-            </a>
+            </Link>
           </p>
           <p className="text-sm text-muted-foreground">
             Healthcare provider?{" "}
-            <a
+            <Link
               href="/register-clinician"
               className="font-medium text-teal-600 hover:text-indigo-600 hover:underline underline-offset-4 transition-colors"
               data-testid="link-register-clinician"
             >
               Register as Clinician
-            </a>
+            </Link>
           </p>
         </div>
 
         <p className="text-center text-xs text-muted-foreground/70">
           By signing in you agree to our{" "}
-          <a href="#" className="underline underline-offset-4 hover:text-primary">
+          <Link href="/terms" className="underline underline-offset-4 hover:text-primary">
             Terms of Service
-          </a>{" "}
+          </Link>{" "}
           and{" "}
-          <a href="#" className="underline underline-offset-4 hover:text-primary">
+          <Link href="/privacy" className="underline underline-offset-4 hover:text-primary">
             Privacy Policy
-          </a>
+          </Link>
           .
         </p>
       </div>

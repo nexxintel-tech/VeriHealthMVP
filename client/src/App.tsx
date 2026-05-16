@@ -11,7 +11,7 @@ import Login from "@/pages/Login";
 import Register from "@/pages/Register";
 import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
-import ConfirmEmail from "@/pages/ConfirmEmail";
+import PrivacyPolicy from "@/pages/PrivacyPolicy";
 import PatientList from "@/pages/PatientList";
 import PatientDetail from "@/pages/PatientDetail";
 import Alerts from "@/pages/Alerts";
@@ -19,7 +19,7 @@ import Settings from "@/pages/Settings";
 import { ClinicianRegister } from "@/pages/ClinicianRegister";
 import { ClinicianApprovals } from "@/pages/ClinicianApprovals";
 import { AdminPanel } from "@/pages/AdminPanel";
-import AuthCallback from "@/pages/AuthCallback";
+import TermsOfService from "@/pages/TermsOfService";
 import PatientHome from "@/pages/patient/PatientHome";
 import PatientVitals from "@/pages/patient/PatientVitals";
 import PatientAlerts from "@/pages/patient/PatientAlerts";
@@ -38,10 +38,10 @@ function Router() {
       <Route path="/register-clinician" component={ClinicianRegister} />
       <Route path="/forgot-password" component={ForgotPassword} />
       <Route path="/reset-password" component={ResetPassword} />
-      <Route path="/confirm-email" component={ConfirmEmail} />
-      <Route path="/auth/callback" component={AuthCallback} />
+      <Route path="/terms" component={TermsOfService} />
+      <Route path="/privacy" component={PrivacyPolicy} />
       <Route path="/">
-        <ProtectedRoute>
+        <ProtectedRoute allowedRoles={['clinician', 'admin', 'institution_admin']}>
           <Dashboard />
         </ProtectedRoute>
       </Route>
